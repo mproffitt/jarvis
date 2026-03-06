@@ -58,8 +58,10 @@ Everything runs locally — no cloud, no API keys, no data leaves your machine.
 %files
 %license LICENSE
 %doc README.md CHANGELOG.md
-%{_datadir}/plasma/plasmoids/%{plugin_id}/
-%{_libdir}/qt6/qml/org/kde/plasma/jarvis/
+%dir %{_datadir}/plasma/plasmoids/%{plugin_id}
+%{_datadir}/plasma/plasmoids/%{plugin_id}/*
+%dir %{_libdir}/qt6/qml/org/kde/plasma/jarvis
+%{_libdir}/qt6/qml/org/kde/plasma/jarvis/*
 %{_datadir}/icons/hicolor/*/apps/jarvis-ai.*
 
 %changelog

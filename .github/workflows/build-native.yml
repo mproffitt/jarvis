@@ -1,0 +1,151 @@
+name: Build Native Packages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-deb:
+    name: Build .deb (Ubuntu 25.04)
+    runs-on: ubuntu-25.04
+    outputs:
+      deb-path: ${{ steps.package.outputs.deb-path }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake g++ extra-cmake-modules debhelper \
+            qt6-base-dev qt6-declarative-dev qt6-multimedia-dev qt6-speech-dev \
+            libplasma-dev libkf6i18n-dev libkf6config-dev \
+            libpipewire-0.3-dev git
+
+      - name: Build whisper.cpp
+        run: |
+          git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper.cpp
+          cmake -B /tmp/whisper.cpp/build -S /tmp/whisper.cpp \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/whisper.cpp/build -j$(nproc)
+          sudo cmake --install /tmp/whisper.cpp/build
+
+      - name: Copy debian files
+        run: cp -r packaging/debian .
+
+      - name: Build Debian package
+        run: |
+          dpkg-buildpackage -us -uc -b
+
+      - name: Package .deb
+        id: package
+        run: |
+          mkdir -p dist
+          mv ../*.deb dist/
+          echo "deb-path=dist/$(ls dist/*.deb)" >> $GITHUB_OUTPUT
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plasma6-jarvis-deb
+          path: dist/*.deb
+
+  build-rpm:
+    name: Build .rpm (Fedora 41)
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:41
+    outputs:
+      rpm-path: ${{ steps.package.outputs.rpm-path }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y \
+            cmake gcc-c++ extra-cmake-modules rpm-build \
+            qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtmultimedia-devel \
+            qt6-qtspeech-devel kf6-plasma-devel kf6-ki18n-devel kf6-kconfig-devel \
+            pipewire-devel git
+
+      - name: Build whisper.cpp
+        run: |
+          git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper.cpp
+          cmake -B /tmp/whisper.cpp/build -S /tmp/whisper.cpp \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/whisper.cpp/build -j$(nproc)
+          cmake --install /tmp/whisper.cpp/build
+          ldconfig
+
+      - name: Build RPM
+        run: |
+          mkdir -p ~/rpmbuild/SOURCES
+          cp packaging/fedora/jarvis.spec ~/rpmbuild/SPECS/
+          tar czf ~/rpmbuild/SOURCES/jarvis-0.1.1.tar.gz --exclude=.git --exclude=packaging .
+          rpmbuild -ba ~/rpmbuild/SPECS/jarvis.spec
+
+      - name: Package .rpm
+        id: package
+        run: |
+          mkdir -p dist
+          mv ~/rpmbuild/RPMS/*/*.rpm dist/
+          echo "rpm-path=dist/$(ls dist/*.rpm)" >> $GITHUB_OUTPUT
+
+      - name: Upload .rpm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plasma6-jarvis-rpm
+          path: dist/*.rpm
+
+  build-pkg:
+    name: Build .pkg.tar.zst (Arch Linux)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    outputs:
+      pkg-path: ${{ steps.package.outputs.pkg-path }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm \
+            cmake gcc extra-cmake-modules base-devel \
+            qt6-base qt6-declarative qt6-multimedia qt6-speech \
+            libplasma ki18n kconfig \
+            pipewire git
+
+      - name: Build whisper.cpp
+        run: |
+          git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper.cpp
+          cmake -B /tmp/whisper.cpp/build -S /tmp/whisper.cpp \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/whisper.cpp/build -j$(nproc)
+          cmake --install /tmp/whisper.cpp/build
+          ldconfig
+
+      - name: Build Arch package
+        run: |
+          cp packaging/arch/PKGBUILD .
+          makepkg -s --noconfirm
+
+      - name: Package .pkg.tar.zst
+        id: package
+        run: |
+          mkdir -p dist
+          mv *.pkg.tar.zst dist/
+          echo "pkg-path=dist/$(ls dist/*.pkg.tar.zst)" >> $GITHUB_OUTPUT
+
+      - name: Upload .pkg.tar.zst artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plasma6-jarvis-pkg
+          path: dist/*.pkg.tar.zst

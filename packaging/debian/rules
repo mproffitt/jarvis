@@ -11,3 +11,12 @@ override_dh_auto_configure:
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_C_FLAGS="-march=x86-64-v2 -O3" \
 		-DCMAKE_CXX_FLAGS="-march=x86-64-v2 -O3"
+
+override_dh_auto_install:
+	dh_auto_install --destdir=debian/plasma6-jarvis
+
+override_dh_install:
+	dh_install --list-missing
+
+override_dh_makeshlibs:
+	dh_makeshlibs -Xlibjarvis_plugin.so
