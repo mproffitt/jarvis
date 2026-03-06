@@ -11,7 +11,9 @@ permissions:
 jobs:
   build-deb:
     name: Build .deb (Ubuntu 25.04)
-    runs-on: ubuntu-25.04
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:25.04
     outputs:
       deb-path: ${{ steps.package.outputs.deb-path }}
     steps:
@@ -19,8 +21,8 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          apt-get update
+          apt-get install -y \
             cmake g++ extra-cmake-modules debhelper \
             qt6-base-dev qt6-declarative-dev qt6-multimedia-dev qt6-speech-dev \
             libplasma-dev libkf6i18n-dev libkf6config-dev \
@@ -34,7 +36,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=/usr/local \
             -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/whisper.cpp/build -j$(nproc)
-          sudo cmake --install /tmp/whisper.cpp/build
+          cmake --install /tmp/whisper.cpp/build
 
       - name: Copy debian files
         run: cp -r packaging/debian .
@@ -136,6 +138,8 @@ jobs:
 
       - name: Build Arch package
         run: |
+          # Copy PKGBUILD to current directory
+          cp packaging/arch/PKGBUILD .
           # Create non-root user for makepkg
           useradd -m builder
           chown -R builder:builder .
