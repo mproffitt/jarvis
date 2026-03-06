@@ -8,19 +8,21 @@ on:
 
 jobs:
   build-ubuntu:
-    name: Build (Ubuntu 24.04)
+    name: Build (Ubuntu 25.04)
     runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:25.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          apt-get update
+          apt-get install -y \
             cmake g++ extra-cmake-modules \
             qt6-base-dev qt6-declarative-dev qt6-multimedia-dev qt6-speech-dev \
             libplasma-dev libkf6i18n-dev libkf6config-dev \
-            libpipewire-0.3-dev
+            libpipewire-0.3-dev git curl
 
       - name: Build whisper.cpp
         run: |
@@ -30,7 +32,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=/usr/local \
             -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/whisper.cpp/build -j$(nproc)
-          sudo cmake --install /tmp/whisper.cpp/build
+          cmake --install /tmp/whisper.cpp/build
 
       - name: Configure
         run: |
@@ -66,7 +68,7 @@ jobs:
           dnf install -y \
             cmake gcc-c++ extra-cmake-modules \
             qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtmultimedia-devel \
-            qt6-qtspeech-devel plasma-framework-devel kf6-ki18n-devel kf6-kconfig-devel \
+            qt6-qtspeech-devel kf6-plasma-devel kf6-ki18n-devel kf6-kconfig-devel \
             pipewire-devel git
 
       - name: Build whisper.cpp

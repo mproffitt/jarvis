@@ -15,7 +15,7 @@ Build-Depends:
  libkf6i18n-dev (>= 6.0),
  libkf6config-dev (>= 6.0),
  libwhisper-dev | whisper.cpp,
-Standards-Version: 4.7.0
+Standards-Version: 4.6.2
 Homepage: https://github.com/novik133/jarvis
 Vcs-Git: https://github.com/novik133/jarvis.git
 Vcs-Browser: https://github.com/novik133/jarvis

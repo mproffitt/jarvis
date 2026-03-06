@@ -18,7 +18,7 @@ BuildRequires:  cmake(Qt6Network) >= 6.0
 BuildRequires:  cmake(Qt6TextToSpeech) >= 6.0
 BuildRequires:  cmake(Qt6Multimedia) >= 6.0
 BuildRequires:  cmake(Qt6Concurrent) >= 6.0
-BuildRequires:  cmake(Plasma) >= 6.0
+BuildRequires:  cmake(KF6Plasma) >= 6.0
 BuildRequires:  cmake(KF6I18n) >= 6.0
 BuildRequires:  cmake(KF6Config) >= 6.0
 BuildRequires:  whisper-cpp-devel
