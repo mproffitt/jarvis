@@ -28,6 +28,7 @@ class JarvisBackend : public QObject
 
     // Core properties
     Q_PROPERTY(QString lastResponse READ lastResponse NOTIFY lastResponseChanged)
+    Q_PROPERTY(QString streamingResponse READ streamingResponse NOTIFY streamingResponseChanged)
     Q_PROPERTY(bool listening READ isListening NOTIFY listeningChanged)
     Q_PROPERTY(bool processing READ isProcessing NOTIFY processingChanged)
     Q_PROPERTY(bool wakeWordActive READ isWakeWordActive NOTIFY wakeWordActiveChanged)
@@ -84,6 +85,7 @@ public:
 
     // Core getters
     [[nodiscard]] QString lastResponse() const { return m_lastResponse; }
+    [[nodiscard]] QString streamingResponse() const { return m_streamingResponse; }
     [[nodiscard]] bool isListening() const;
     [[nodiscard]] bool isProcessing() const { return m_processing; }
     [[nodiscard]] bool isWakeWordActive() const;
@@ -181,6 +183,7 @@ public:
 
 signals:
     void lastResponseChanged();
+    void streamingResponseChanged();
     void listeningChanged();
     void processingChanged();
     void wakeWordActiveChanged();
@@ -215,7 +218,8 @@ signals:
     void availableTtsVoicesChanged();
 
 private slots:
-    void onLlmReplyFinished(QNetworkReply *reply);
+    void onLlmStreamReadyRead();
+    void onLlmStreamFinished();
     void onHealthCheckFinished(QNetworkReply *reply);
     void checkReminders();
     void onVoiceCommandTranscribed(const QString &text);
@@ -226,6 +230,8 @@ private:
     void addToChatHistory(const QString &role, const QString &message);
     QJsonArray buildConversationContext() const;
     void connectModuleSignals();
+    void trySpeakCompleteSentences();
+    void finalizeStreamingResponse();
 
     static constexpr auto JARVIS_SYSTEM_PROMPT =
         "You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), the advanced AI assistant "
@@ -295,10 +301,17 @@ private:
 
     // Core state
     QString m_lastResponse;
+    QString m_streamingResponse;
     QString m_statusText;
     QStringList m_chatHistory;
     std::atomic<bool> m_processing{false};
     std::atomic<bool> m_connected{false};
+
+    // Streaming state
+    QNetworkReply *m_streamReply{nullptr};
+    QString m_streamBuffer;
+    QString m_fullStreamedResponse;
+    QString m_spokenSoFar;
 
     // Conversation
     struct ChatMessage {

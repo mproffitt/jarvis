@@ -1,11 +1,15 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(jarvis-plasmoid VERSION 0.1.0 LANGUAGES CXX)
+project(jarvis-plasmoid VERSION 0.1.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
+
+# Native architecture optimizations
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native -O3")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -O3")
 
 set(QT_DEFAULT_MAJOR_VERSION 6)
 set(QT_MAJOR_VERSION 6)

@@ -3,7 +3,7 @@
   <img src="https://img.shields.io/badge/Qt-6.0+-green?style=for-the-badge&logo=qt&logoColor=white" alt="Qt 6">
   <img src="https://img.shields.io/badge/C++-23-orange?style=for-the-badge&logo=cplusplus&logoColor=white" alt="C++23">
   <img src="https://img.shields.io/badge/License-GPL--3.0-red?style=for-the-badge" alt="GPL-3.0">
-  <img src="https://img.shields.io/badge/Version-0.1.0-brightgreen?style=for-the-badge" alt="Version 0.1.0">
+  <img src="https://img.shields.io/badge/Version-0.1.1-brightgreen?style=for-the-badge" alt="Version 0.1.1">
 </p>
 
 <h1 align="center">J.A.R.V.I.S.</h1>

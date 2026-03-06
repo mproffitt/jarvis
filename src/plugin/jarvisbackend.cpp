@@ -315,17 +315,23 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
     requestBody[QStringLiteral("messages")] = messages;
     requestBody[QStringLiteral("temperature")] = 0.7;
     requestBody[QStringLiteral("max_tokens")] = 2048;
-    requestBody[QStringLiteral("stream")] = false;
+    requestBody[QStringLiteral("stream")] = true;
 
     const QUrl url(m_settings->llmServerUrl() + QStringLiteral("/v1/chat/completions"));
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-    request.setTransferTimeout(60000);
+    request.setTransferTimeout(120000);
 
-    auto *reply = m_networkManager->post(request, QJsonDocument(requestBody).toJson());
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        onLlmReplyFinished(reply);
-    });
+    // Reset streaming state
+    m_streamBuffer.clear();
+    m_fullStreamedResponse.clear();
+    m_spokenSoFar.clear();
+    m_streamingResponse.clear();
+    emit streamingResponseChanged();
+
+    m_streamReply = m_networkManager->post(request, QJsonDocument(requestBody).toJson());
+    connect(m_streamReply, &QNetworkReply::readyRead, this, &JarvisBackend::onLlmStreamReadyRead);
+    connect(m_streamReply, &QNetworkReply::finished, this, &JarvisBackend::onLlmStreamFinished);
 }
 
 QJsonArray JarvisBackend::buildConversationContext() const
@@ -364,15 +370,135 @@ QJsonArray JarvisBackend::buildConversationContext() const
     return messages;
 }
 
-void JarvisBackend::onLlmReplyFinished(QNetworkReply *reply)
+void JarvisBackend::onLlmStreamReadyRead()
 {
-    reply->deleteLater();
+    if (!m_streamReply) return;
+
+    const QByteArray data = m_streamReply->readAll();
+    m_streamBuffer += QString::fromUtf8(data);
+
+    // Process SSE lines: each chunk is "data: {...}\n\n"
+    while (true) {
+        const int nlPos = m_streamBuffer.indexOf(QLatin1Char('\n'));
+        if (nlPos < 0) break;
+
+        const QString line = m_streamBuffer.left(nlPos).trimmed();
+        m_streamBuffer = m_streamBuffer.mid(nlPos + 1);
+
+        if (line.isEmpty() || line == QStringLiteral("data: [DONE]")) {
+            continue;
+        }
+
+        if (!line.startsWith(QStringLiteral("data: "))) {
+            continue;
+        }
+
+        const QString jsonStr = line.mid(6); // skip "data: "
+        const auto doc = QJsonDocument::fromJson(jsonStr.toUtf8());
+        if (doc.isNull()) continue;
+
+        const auto obj = doc.object();
+        const auto choices = obj[QStringLiteral("choices")].toArray();
+        if (choices.isEmpty()) continue;
+
+        const auto delta = choices[0].toObject()[QStringLiteral("delta")].toObject();
+        const QString content = delta[QStringLiteral("content")].toString();
+
+        if (!content.isEmpty()) {
+            m_fullStreamedResponse += content;
+
+            // Update streaming response for QML (strip action blocks for display)
+            m_streamingResponse = stripActionsFromResponse(m_fullStreamedResponse);
+            emit streamingResponseChanged();
+
+            // Try to speak any complete sentences that haven't been spoken yet
+            trySpeakCompleteSentences();
+        }
+    }
+}
+
+void JarvisBackend::trySpeakCompleteSentences()
+{
+    // Get the displayable text so far (without action blocks)
+    const QString displayText = stripActionsFromResponse(m_fullStreamedResponse);
+
+    // Find complete sentences that we haven't spoken yet
+    static const QRegularExpression sentenceEndRe(QStringLiteral("[.!?;:]\\s"));
+    const int searchStart = m_spokenSoFar.length();
+    if (searchStart >= displayText.length()) return;
+
+    const QString unspoken = displayText.mid(searchStart);
+    const auto match = sentenceEndRe.match(unspoken);
+
+    if (match.hasMatch()) {
+        // We have at least one complete sentence
+        const int endPos = match.capturedStart() + 1; // include the punctuation
+        const QString sentence = unspoken.left(endPos).trimmed();
+
+        if (!sentence.isEmpty()) {
+            m_spokenSoFar = displayText.left(searchStart + endPos);
+            m_tts->speakSentence(sentence);
+        }
+    }
+}
+
+void JarvisBackend::finalizeStreamingResponse()
+{
+    const QString responseText = m_fullStreamedResponse.trimmed();
+
+    if (responseText.isEmpty()) {
+        m_lastResponse = QStringLiteral("I apologize, Sir. I wasn't able to formulate a response.");
+        emit lastResponseChanged();
+        addToChatHistory("jarvis", m_lastResponse);
+        setStatus("Ready.");
+        return;
+    }
+
+    m_conversationHistory.push_back({QStringLiteral("assistant"), responseText});
+
+    const QString spokenText = stripActionsFromResponse(responseText);
+
+    m_lastResponse = spokenText;
+    m_streamingResponse.clear();
+    emit lastResponseChanged();
+    emit streamingResponseChanged();
+
+    addToChatHistory("jarvis", spokenText);
+    setStatus("Ready.");
+    emit responseReceived(spokenText);
+
+    // Speak any remaining unspoken text
+    const QString remaining = spokenText.mid(m_spokenSoFar.length()).trimmed();
+    if (!remaining.isEmpty()) {
+        m_tts->speakSentence(remaining);
+    }
+
+    // Parse and execute any actions embedded in the LLM response
+    parseAndExecuteActions(responseText);
+}
+
+void JarvisBackend::onLlmStreamFinished()
+{
+    if (!m_streamReply) return;
+
+    const auto error = m_streamReply->error();
+    const QString errorString = m_streamReply->errorString();
+
+    // Process any remaining data before cleanup
+    const QByteArray remaining = m_streamReply->readAll();
+    if (!remaining.isEmpty()) {
+        m_streamBuffer += QString::fromUtf8(remaining);
+    }
+
+    m_streamReply->deleteLater();
+    m_streamReply = nullptr;
+
     m_processing = false;
     emit processingChanged();
 
-    if (reply->error() != QNetworkReply::NoError) {
+    if (error != QNetworkReply::NoError && m_fullStreamedResponse.isEmpty()) {
         const auto errorMsg = QStringLiteral("I'm experiencing a connection issue, Sir: %1")
-                                  .arg(reply->errorString());
+                                  .arg(errorString);
         setStatus(errorMsg);
         emit errorOccurred(errorMsg);
         if (!m_conversationHistory.empty()) {
@@ -381,39 +507,32 @@ void JarvisBackend::onLlmReplyFinished(QNetworkReply *reply)
         return;
     }
 
-    const auto data = reply->readAll();
-    const auto doc = QJsonDocument::fromJson(data);
-    const auto obj = doc.object();
+    // Parse any remaining SSE lines in buffer
+    while (true) {
+        const int nlPos = m_streamBuffer.indexOf(QLatin1Char('\n'));
+        if (nlPos < 0) break;
 
-    QString responseText;
+        const QString line = m_streamBuffer.left(nlPos).trimmed();
+        m_streamBuffer = m_streamBuffer.mid(nlPos + 1);
 
-    const auto choices = obj[QStringLiteral("choices")].toArray();
-    if (!choices.isEmpty()) {
-        const auto firstChoice = choices[0].toObject();
-        const auto message = firstChoice[QStringLiteral("message")].toObject();
-        responseText = message[QStringLiteral("content")].toString().trimmed();
+        if (line.isEmpty() || line == QStringLiteral("data: [DONE]")) continue;
+        if (!line.startsWith(QStringLiteral("data: "))) continue;
+
+        const auto doc = QJsonDocument::fromJson(line.mid(6).toUtf8());
+        if (doc.isNull()) continue;
+
+        const auto choices = doc.object()[QStringLiteral("choices")].toArray();
+        if (choices.isEmpty()) continue;
+
+        const QString content = choices[0].toObject()[QStringLiteral("delta")].toObject()
+                                    [QStringLiteral("content")].toString();
+        if (!content.isEmpty()) {
+            m_fullStreamedResponse += content;
+        }
     }
 
-    if (responseText.isEmpty()) {
-        responseText = QStringLiteral("I apologize, Sir. I wasn't able to formulate a response.");
-    }
-
-    m_conversationHistory.push_back({QStringLiteral("assistant"), responseText});
-
-    // Strip action blocks from what we show/speak, but still execute them
-    const QString spokenText = stripActionsFromResponse(responseText);
-
-    m_lastResponse = spokenText;
-    emit lastResponseChanged();
-
-    addToChatHistory("jarvis", spokenText);
-    setStatus("Ready.");
-
-    emit responseReceived(spokenText);
-    speak(spokenText);
-
-    // Parse and execute any actions embedded in the LLM response
-    parseAndExecuteActions(responseText);
+    // Finalize
+    finalizeStreamingResponse();
 }
 
 void JarvisBackend::checkConnection()

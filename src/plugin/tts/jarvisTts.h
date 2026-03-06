@@ -2,8 +2,12 @@
 
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QProcess>
 #include <QTextToSpeech>
+#include <QQueue>
+#include <QMutex>
+#include <QTemporaryFile>
 #include <atomic>
 
 class JarvisSettings;
@@ -14,11 +18,13 @@ class JarvisTts : public QObject
 
 public:
     explicit JarvisTts(JarvisSettings *settings, QObject *parent = nullptr);
+    ~JarvisTts() override;
 
     [[nodiscard]] bool isSpeaking() const { return m_speaking.load(); }
     [[nodiscard]] bool isMuted() const;
 
     void speak(const QString &text);
+    void speakSentence(const QString &sentence);
     void stop();
     void toggleMute();
 
@@ -28,17 +34,34 @@ public:
     void onTtsVolumeChanged();
     void onVoiceActivated(const QString &voiceId, const QString &onnxPath);
 
+    // Sentence splitting for streaming
+    static QStringList splitIntoSentences(const QString &text);
+
 signals:
     void speakingChanged();
 
 private:
     void initTts();
+    void startPiperProcess();
+    void stopPiperProcess();
+    void processNextSentence();
+    void onPiperFinished(int exitCode, QProcess::ExitStatus status);
+    void playWavFile(const QString &wavPath);
 
     JarvisSettings *m_settings{nullptr};
 
     QTextToSpeech *m_tts{nullptr};
+
+    // Persistent Piper process
     QProcess *m_piperProcess{nullptr};
+    QProcess *m_playProcess{nullptr};
     QString m_piperBin;
     bool m_usePiper{false};
     std::atomic<bool> m_speaking{false};
+
+    // Sentence queue for streaming TTS
+    QQueue<QString> m_sentenceQueue;
+    QMutex m_queueMutex;
+    bool m_playingBack{false};
+    QString m_currentWavPath;
 };
