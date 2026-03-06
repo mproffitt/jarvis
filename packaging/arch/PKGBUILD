@@ -1,0 +1,48 @@
+# Maintainer: Kamil 'Novik' Nowicki <kamil@kamilnowicki.com>
+
+pkgname=plasma6-jarvis
+pkgver=0.1.1
+pkgrel=1
+pkgdesc="Local AI assistant for KDE Plasma 6 — J.A.R.V.I.S. (Just A Rather Very Intelligent System)"
+arch=('x86_64')
+url="https://github.com/novik133/jarvis"
+license=('GPL-3.0-or-later')
+depends=(
+    'qt6-base'
+    'qt6-declarative'
+    'qt6-multimedia'
+    'qt6-speech'
+    'plasma-framework'
+    'ki18n'
+    'kconfig'
+    'whisper.cpp'
+    'pipewire'
+)
+makedepends=(
+    'cmake>=3.25'
+    'extra-cmake-modules>=6.0'
+    'gcc>=13'
+)
+optdepends=(
+    'piper-tts: high-quality offline text-to-speech'
+    'xdotool: keyboard simulation for type_text action'
+    'llama.cpp: local LLM server for AI chat'
+)
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cmake -B build -S "jarvis-${pkgver}" \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_FLAGS="${CFLAGS} -O3" \
+        -DCMAKE_CXX_FLAGS="${CXXFLAGS} -O3"
+    cmake --build build -j"$(nproc)"
+}
+
+package() {
+    DESTDIR="${pkgdir}" cmake --install build
+    install -Dm644 "jarvis-${pkgver}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+    install -Dm644 "jarvis-${pkgver}/README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+    install -Dm644 "jarvis-${pkgver}/CHANGELOG.md" "${pkgdir}/usr/share/doc/${pkgname}/CHANGELOG.md"
+}

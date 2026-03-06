@@ -1,0 +1,45 @@
+Source: plasma6-jarvis
+Section: kde
+Priority: optional
+Maintainer: Kamil 'Novik' Nowicki <kamil@kamilnowicki.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ cmake (>= 3.25),
+ extra-cmake-modules (>= 6.0),
+ g++ (>= 13),
+ qt6-base-dev (>= 6.0),
+ qt6-declarative-dev (>= 6.0),
+ qt6-multimedia-dev (>= 6.0),
+ qt6-speech-dev (>= 6.0),
+ libplasma-dev (>= 6.0),
+ libkf6i18n-dev (>= 6.0),
+ libkf6config-dev (>= 6.0),
+ libwhisper-dev | whisper.cpp,
+Standards-Version: 4.7.0
+Homepage: https://github.com/novik133/jarvis
+Vcs-Git: https://github.com/novik133/jarvis.git
+Vcs-Browser: https://github.com/novik133/jarvis
+Rules-Requires-Root: no
+
+Package: plasma6-jarvis
+Architecture: any
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ kwin-wayland | kwin-x11,
+ pipewire,
+Recommends:
+ piper-tts,
+ xdotool,
+Suggests:
+ llama.cpp,
+Description: Local AI assistant for KDE Plasma 6 — J.A.R.V.I.S.
+ A fully local AI assistant plasmoid for KDE Plasma 6, inspired by
+ Tony Stark's iconic J.A.R.V.I.S. (Just A Rather Very Intelligent System).
+ .
+ Features include local LLM chat via llama.cpp, wake word detection using
+ whisper.cpp, Piper text-to-speech with downloadable voices, real-time
+ system monitoring, voice commands, and advanced system interaction
+ (run commands, open apps, write files, type text).
+ .
+ Everything runs locally — no cloud, no API keys, no data leaves your machine.

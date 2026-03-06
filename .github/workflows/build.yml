@@ -1,0 +1,130 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-ubuntu:
+    name: Build (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake g++ extra-cmake-modules \
+            qt6-base-dev qt6-declarative-dev qt6-multimedia-dev qt6-speech-dev \
+            libplasma-dev libkf6i18n-dev libkf6config-dev \
+            libpipewire-0.3-dev
+
+      - name: Build whisper.cpp
+        run: |
+          git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper.cpp
+          cmake -B /tmp/whisper.cpp/build -S /tmp/whisper.cpp \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/whisper.cpp/build -j$(nproc)
+          sudo cmake --install /tmp/whisper.cpp/build
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-O3" \
+            -DCMAKE_CXX_FLAGS="-O3"
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Package plasmoid
+        run: |
+          cd package && zip -r ../jarvis-ai.plasmoid . -x '.*'
+
+      - name: Upload plasmoid artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-ai-plasmoid
+          path: jarvis-ai.plasmoid
+
+  build-fedora:
+    name: Build (Fedora 41)
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:41
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          dnf install -y \
+            cmake gcc-c++ extra-cmake-modules \
+            qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtmultimedia-devel \
+            qt6-qtspeech-devel plasma-framework-devel kf6-ki18n-devel kf6-kconfig-devel \
+            pipewire-devel git
+
+      - name: Build whisper.cpp
+        run: |
+          git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper.cpp
+          cmake -B /tmp/whisper.cpp/build -S /tmp/whisper.cpp \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/whisper.cpp/build -j$(nproc)
+          cmake --install /tmp/whisper.cpp/build
+          ldconfig
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-O3" \
+            -DCMAKE_CXX_FLAGS="-O3"
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+  build-arch:
+    name: Build (Arch Linux)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm \
+            cmake gcc extra-cmake-modules \
+            qt6-base qt6-declarative qt6-multimedia qt6-speech \
+            plasma-framework ki18n kconfig \
+            pipewire git base-devel
+
+      - name: Build whisper.cpp
+        run: |
+          git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper.cpp
+          cmake -B /tmp/whisper.cpp/build -S /tmp/whisper.cpp \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/whisper.cpp/build -j$(nproc)
+          cmake --install /tmp/whisper.cpp/build
+          ldconfig
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-O3" \
+            -DCMAKE_CXX_FLAGS="-O3"
+
+      - name: Build
+        run: cmake --build build -j$(nproc)

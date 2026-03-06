@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Publish Release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake g++ extra-cmake-modules \
+            qt6-base-dev qt6-declarative-dev qt6-multimedia-dev qt6-speech-dev \
+            libplasma-dev libkf6i18n-dev libkf6config-dev \
+            libpipewire-0.3-dev
+
+      - name: Build whisper.cpp
+        run: |
+          git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper.cpp
+          cmake -B /tmp/whisper.cpp/build -S /tmp/whisper.cpp \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/whisper.cpp/build -j$(nproc)
+          sudo cmake --install /tmp/whisper.cpp/build
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-O3" \
+            -DCMAKE_CXX_FLAGS="-O3"
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Create .plasmoid package
+        run: cd package && zip -r ../jarvis-ai.plasmoid . -x '.*'
+
+      - name: Create source tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git archive --format=tar.gz --prefix="jarvis-${VERSION}/" HEAD \
+            -o "jarvis-${VERSION}.tar.gz"
+
+      - name: Extract changelog for release notes
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Extract the section for this version from CHANGELOG.md
+          awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found{print}" \
+            CHANGELOG.md > /tmp/release_notes.md
+          echo "Release notes:"
+          cat /tmp/release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: /tmp/release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            jarvis-ai.plasmoid
+            jarvis-*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

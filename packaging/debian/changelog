@@ -1,0 +1,23 @@
+plasma6-jarvis (0.1.1-1) unstable; urgency=medium
+
+  * LLM token streaming via SSE — real-time response display
+  * Sentence-based TTS pipeline — speaks first sentence while LLM generates
+  * Piper TTS sentence-queue architecture
+  * Native compilation optimizations (-march=native -O3)
+  * New streamingResponse Q_PROPERTY for QML
+  * Improved stop behavior — clears entire TTS queue instantly
+
+ -- Kamil 'Novik' Nowicki <kamil@kamilnowicki.com>  Thu, 06 Mar 2026 09:00:00 +0000
+
+plasma6-jarvis (0.1.0-1) unstable; urgency=medium
+
+  * Initial release
+  * Local LLM integration via llama.cpp
+  * Wake word detection using whisper.cpp
+  * Piper TTS with downloadable voice models
+  * Real-time system monitoring
+  * 14 built-in voice commands
+  * Advanced system interaction via LLM ACTION blocks
+  * Iron Man HUD-style UI
+
+ -- Kamil 'Novik' Nowicki <kamil@kamilnowicki.com>  Wed, 05 Mar 2026 12:00:00 +0000
