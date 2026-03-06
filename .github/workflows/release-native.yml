@@ -40,10 +40,14 @@ jobs:
 
       - name: Install whisper development files
         run: |
-          # Create a dummy package to satisfy build dependency
-          echo "libwhisper-dev local" > /tmp/dummy
-          equivs-build /tmp/dummy || true
-          dpkg -i libwhisper-dev*.deb || true
+          # Install whisper.cpp to /usr (not /usr/local) to satisfy build dependency
+          git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper-dev
+          cmake -B /tmp/whisper-dev/build -S /tmp/whisper-dev \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/whisper-dev/build -j$(nproc)
+          cmake --install /tmp/whisper-dev/build
 
       - name: Copy debian files
         run: cp -r packaging/debian .
@@ -98,7 +102,11 @@ jobs:
         run: |
           mkdir -p ~/rpmbuild/{SOURCES,SPECS,RPMS,BUILD,SRPMS}
           cp packaging/fedora/jarvis.spec ~/rpmbuild/SPECS/
-          tar czf ~/rpmbuild/SOURCES/plasma6-jarvis-0.1.1.tar.gz --exclude=.git --exclude=packaging .
+          # Create directory structure that matches spec expectations
+          mkdir -p plasma6-jarvis-0.1.1
+          tar czf ~/rpmbuild/SOURCES/plasma6-jarvis-0.1.1.tar.gz \
+            --exclude=.git --exclude=packaging \
+            --transform 's,^,plasma6-jarvis-0.1.1/,' .
           rpmbuild -ba ~/rpmbuild/SPECS/jarvis.spec
 
       - name: Package .rpm
@@ -132,16 +140,12 @@ jobs:
             libplasma ki18n kconfig \
             pipewire git
 
-      - name: Build and install whisper.cpp
+      - name: Install whisper.cpp from AUR
         run: |
-          git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper.cpp
-          cmake -B /tmp/whisper.cpp/build -S /tmp/whisper.cpp \
-            -DBUILD_SHARED_LIBS=ON \
-            -DCMAKE_INSTALL_PREFIX=/usr/local \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build /tmp/whisper.cpp/build -j$(nproc)
-          cmake --install /tmp/whisper.cpp/build
-          ldconfig
+          # Install yay for AUR support
+          pacman -S --noconfirm yay
+          # Install whisper.cpp from AUR
+          yay -S --noconfirm whisper.cpp
 
       - name: Build Arch package
         run: |
