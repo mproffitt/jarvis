@@ -41,12 +41,12 @@ system monitoring, voice commands, and advanced system interaction
 Everything runs locally — no cloud, no API keys, no data leaves your machine.
 
 %prep
-%autosetup -n jarvis-%{version}
+%autosetup -n plasma6-jarvis-%{version}
 
 %build
-%cmake \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_FLAGS="%{optflags} -O3" \
+%cmake \ 
+    -DCMAKE_BUILD_TYPE=Release \ 
+    -DCMAKE_C_FLAGS="%{optflags} -O3" \ 
     -DCMAKE_CXX_FLAGS="%{optflags} -O3"
 %cmake_build
 
@@ -63,12 +63,12 @@ Everything runs locally — no cloud, no API keys, no data leaves your machine.
 %{_datadir}/icons/hicolor/*/apps/jarvis-ai.*
 
 %changelog
-* Thu Mar 06 2026 Kamil 'Novik' Nowicki <kamil@kamilnowicki.com> - 0.1.1-1
+* Thu Mar  6 2026 Kamil 'Novik' Nowicki <kamil@kamilnowicki.com> - 0.1.1-1
 - LLM token streaming via SSE — real-time response display
 - Sentence-based TTS pipeline
 - Piper TTS sentence-queue architecture
 - Native compilation optimizations
 - New streamingResponse Q_PROPERTY for QML
 
-* Wed Mar 05 2026 Kamil 'Novik' Nowicki <kamil@kamilnowicki.com> - 0.1.0-1
+* Wed Mar  5 2026 Kamil 'Novik' Nowicki <kamil@kamilnowicki.com> - 0.1.0-1
 - Initial release
