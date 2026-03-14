@@ -160,22 +160,40 @@ Item {
                 }
             }
 
-            // Model ID for Ollama (text field — models listed separately below)
+            // Model selector for Ollama (dropdown populated from installed models)
             RowLayout {
                 Kirigami.FormData.label: i18n("Model:")
                 visible: JarvisBackend.llmProvider === "ollama"
                 spacing: Kirigami.Units.smallSpacing
-                TextField {
-                    id: modelIdField
-                    text: JarvisBackend.llmModelId
-                    placeholderText: "llama3.2"
+                ComboBox {
+                    id: ollamaModelCombo
                     Layout.fillWidth: true
-                    onAccepted: JarvisBackend.setLlmModelId(text)
+                    property var choices: JarvisBackend.availableLlmModels
+                    model: {
+                        var items = []
+                        var ch = JarvisBackend.availableLlmModels
+                        for (var i = 0; i < ch.length; i++)
+                            items.push(ch[i].name + "  (" + ch[i].size + ")")
+                        return items
+                    }
+                    currentIndex: {
+                        var id = JarvisBackend.llmModelId
+                        var ch = JarvisBackend.availableLlmModels
+                        for (var i = 0; i < ch.length; i++)
+                            if (ch[i].id === id) return i
+                        return -1
+                    }
+                    onActivated: function(index) {
+                        var ch = JarvisBackend.availableLlmModels
+                        if (index >= 0 && index < ch.length)
+                            JarvisBackend.setLlmModelId(ch[index].id)
+                    }
                 }
                 Button {
-                    text: i18n("Apply")
-                    icon.name: "dialog-ok-apply"
-                    onClicked: JarvisBackend.setLlmModelId(modelIdField.text)
+                    icon.name: "view-refresh"
+                    ToolTip.text: i18n("Refresh model list")
+                    ToolTip.visible: hovered
+                    onClicked: JarvisBackend.refreshOllamaModels()
                 }
             }
 
@@ -203,16 +221,48 @@ Item {
                 }
             }
 
-            Label {
+            // llama.cpp model dropdown (downloaded models only)
+            ComboBox {
                 Kirigami.FormData.label: i18n("Active model:")
                 visible: JarvisBackend.llmProvider === "llamacpp"
-                text: JarvisBackend.currentModelName || i18n("None selected")
-                font.bold: true
+                Layout.fillWidth: true
+                model: {
+                    var items = []
+                    var all = JarvisBackend.availableLlmModels
+                    for (var i = 0; i < all.length; i++)
+                        if (all[i].downloaded)
+                            items.push(all[i].name + "  (" + all[i].size + ")")
+                    if (items.length === 0) items.push(i18n("No models downloaded"))
+                    return items
+                }
+                currentIndex: {
+                    var name = JarvisBackend.currentModelName
+                    var all = JarvisBackend.availableLlmModels
+                    var idx = 0
+                    for (var i = 0; i < all.length; i++) {
+                        if (!all[i].downloaded) continue
+                        if (all[i].id === name || all[i].name.indexOf(name) >= 0) return idx
+                        idx++
+                    }
+                    return 0
+                }
+                onActivated: function(index) {
+                    var all = JarvisBackend.availableLlmModels
+                    var idx = 0
+                    for (var i = 0; i < all.length; i++) {
+                        if (!all[i].downloaded) continue
+                        if (idx === index) {
+                            JarvisBackend.setActiveLlmModel(all[i].id)
+                            return
+                        }
+                        idx++
+                    }
+                }
             }
         }
 
         // ════════════════════════════════════════
-        // LLM MODELS (llama.cpp GGUF models)
+        // LLM MODELS (llama.cpp GGUF download)
         // ════════════════════════════════════════
         Kirigami.FormLayout {
             Layout.fillWidth: true
@@ -220,11 +270,11 @@ Item {
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18n("GGUF Models (llama.cpp)")
+                Kirigami.FormData.label: i18n("Download GGUF Models")
             }
 
             Label {
-                text: i18n("Download GGUF models for your local llama.cpp server. Smaller models are faster but less capable.")
+                text: i18n("Download models for llama.cpp. Smaller = faster, larger = smarter.")
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
                 color: Kirigami.Theme.disabledTextColor
@@ -235,6 +285,7 @@ Item {
         Repeater {
             model: JarvisBackend.llmProvider === "llamacpp" ? JarvisBackend.availableLlmModels : []
             delegate: Kirigami.AbstractCard {
+                visible: !modelData.downloaded
                 Layout.fillWidth: true
                 Layout.leftMargin: Kirigami.Units.smallSpacing
                 Layout.rightMargin: Kirigami.Units.smallSpacing
@@ -254,12 +305,6 @@ Item {
                                 color: Kirigami.Theme.disabledTextColor
                                 font.pointSize: Kirigami.Theme.smallFont.pointSize
                             }
-                            Kirigami.Icon {
-                                visible: modelData.active
-                                source: "emblem-default"
-                                implicitWidth: Kirigami.Units.iconSizes.small
-                                implicitHeight: Kirigami.Units.iconSizes.small
-                            }
                         }
                         Label {
                             text: modelData.desc
@@ -270,14 +315,10 @@ Item {
                         }
                     }
                     Button {
-                        text: modelData.active ? i18n("Active") : (modelData.downloaded ? i18n("Activate") : i18n("Download"))
-                        icon.name: modelData.active ? "checkmark" : (modelData.downloaded ? "media-playback-start" : "download")
-                        enabled: !modelData.active && !JarvisBackend.downloading
-                        highlighted: modelData.active
-                        onClicked: {
-                            if (modelData.downloaded) JarvisBackend.setActiveLlmModel(modelData.id)
-                            else JarvisBackend.downloadLlmModel(modelData.id)
-                        }
+                        text: i18n("Download")
+                        icon.name: "download"
+                        enabled: !JarvisBackend.downloading
+                        onClicked: JarvisBackend.downloadLlmModel(modelData.id)
                     }
                 }
             }
@@ -292,79 +333,6 @@ Item {
             onClicked: JarvisBackend.fetchMoreModels()
         }
 
-        // ════════════════════════════════════════
-        // OLLAMA MODELS
-        // ════════════════════════════════════════
-        Kirigami.FormLayout {
-            Layout.fillWidth: true
-            visible: JarvisBackend.llmProvider === "ollama"
-
-            Kirigami.Separator {
-                Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18n("Ollama Models")
-            }
-
-            Label {
-                text: i18n("Models installed in Ollama. Select one to use, or type a model name in the field above.")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-            }
-        }
-
-        Repeater {
-            model: JarvisBackend.llmProvider === "ollama" ? JarvisBackend.availableLlmModels : []
-            delegate: Kirigami.AbstractCard {
-                Layout.fillWidth: true
-                Layout.leftMargin: Kirigami.Units.smallSpacing
-                Layout.rightMargin: Kirigami.Units.smallSpacing
-                contentItem: RowLayout {
-                    spacing: Kirigami.Units.largeSpacing
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 2
-                        RowLayout {
-                            spacing: Kirigami.Units.smallSpacing
-                            Label {
-                                text: modelData.name
-                                font.bold: true
-                            }
-                            Label {
-                                text: modelData.size
-                                color: Kirigami.Theme.disabledTextColor
-                                font.pointSize: Kirigami.Theme.smallFont.pointSize
-                            }
-                            Kirigami.Icon {
-                                visible: modelData.active
-                                source: "emblem-default"
-                                implicitWidth: Kirigami.Units.iconSizes.small
-                                implicitHeight: Kirigami.Units.iconSizes.small
-                            }
-                        }
-                    }
-                    Button {
-                        text: modelData.active ? i18n("Active") : i18n("Select")
-                        icon.name: modelData.active ? "checkmark" : "media-playback-start"
-                        enabled: !modelData.active
-                        highlighted: modelData.active
-                        onClicked: {
-                            JarvisBackend.setLlmModelId(modelData.id)
-                            JarvisBackend.refreshOllamaModels()
-                        }
-                    }
-                }
-            }
-        }
-
-        Button {
-            text: i18n("Refresh Models")
-            icon.name: "view-refresh"
-            visible: JarvisBackend.llmProvider === "ollama"
-            Layout.leftMargin: Kirigami.Units.largeSpacing
-            Layout.topMargin: Kirigami.Units.smallSpacing
-            onClicked: JarvisBackend.refreshOllamaModels()
-        }
 
         // ════════════════════════════════════════
         // TTS VOICES

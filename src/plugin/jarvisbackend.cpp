@@ -349,9 +349,16 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
 
     // Add model to request body for non-llamacpp providers
     if (m_settings->providerNeedsModelInRequest()) {
-        const QString modelId = m_settings->llmModelId();
-        if (!modelId.isEmpty())
-            requestBody[QStringLiteral("model")] = modelId;
+        QString modelId = m_settings->llmModelId();
+        if (modelId.isEmpty()) {
+            m_processing = false;
+            emit processingChanged();
+            setStatus("No model selected. Please choose a model in settings.");
+            emit errorOccurred("No model selected.");
+            if (!m_conversationHistory.empty()) m_conversationHistory.pop_back();
+            return;
+        }
+        requestBody[QStringLiteral("model")] = modelId;
     }
 
     const QUrl url(m_settings->chatCompletionsUrl());
