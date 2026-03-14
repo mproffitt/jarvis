@@ -8,8 +8,11 @@
 #include <QTimer>
 #include <QMutex>
 #include <QByteArray>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
 #include <atomic>
 #include <vector>
+#include <functional>
 
 #include <whisper.h>
 
@@ -50,6 +53,7 @@ signals:
     void lastTranscriptionChanged();
     void voiceCommandTranscribed(const QString &text);
     void micBusyChanged(bool busy);
+    void modelDownloadStatus(const QString &status);
 
 private slots:
     void processAudioBuffer();
@@ -66,6 +70,8 @@ private:
     QString findWhisperModel() const;
     QString findVadModel() const;
     void initVad();
+    void ensureModelsDownloaded();
+    void downloadModel(const QString &url, const QString &destPath, const std::function<void()> &onComplete);
 
     static constexpr int JARVIS_SAMPLE_RATE = 16000;
 
@@ -101,4 +107,5 @@ private:
     QString m_lastTranscription;
 
     MicMonitor *m_micMonitor{nullptr};
+    QNetworkAccessManager *m_downloadManager{nullptr};
 };

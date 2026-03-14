@@ -84,6 +84,9 @@ void JarvisBackend::connectModuleSignals()
         if (busy) setStatus("Mic in use by another app — wake word paused.");
         else setStatus("Mic free — wake word active.");
     });
+    connect(m_audio, &JarvisAudio::modelDownloadStatus, this, [this](const QString &status) {
+        setStatus(status);
+    });
 
     // TTS → Backend
     connect(m_tts, &JarvisTts::speakingChanged, this, [this]() {

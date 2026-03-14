@@ -19,8 +19,8 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
     , m_silenceTimer(new QTimer(this))
 {
     initAudioCapture();
-    initWhisper();
-    initVad();
+    m_downloadManager = new QNetworkAccessManager(this);
+    ensureModelsDownloaded();
 
     // Check for wake word every second, even though the buffer holds wakeBufferSeconds of audio
     m_audioProcessTimer->setInterval(1000);
@@ -438,6 +438,95 @@ QString JarvisAudio::findVadModel() const
         if (QFileInfo::exists(path)) return path;
     }
     return {};
+}
+
+void JarvisAudio::ensureModelsDownloaded()
+{
+    const QString dataDir = QDir::homePath() + QStringLiteral("/.local/share/jarvis");
+    QDir().mkpath(dataDir);
+
+    // Determine which whisper model to download based on settings
+    const QString whisperSize = m_settings->whisperModel(); // "tiny", "base", "small"
+    const QString whisperFile = QStringLiteral("ggml-%1.bin").arg(whisperSize);
+    const QString whisperUrl = QStringLiteral(
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/%1").arg(whisperFile);
+    const QString whisperDest = dataDir + QStringLiteral("/") + whisperFile;
+
+    const QString vadUrl = QStringLiteral(
+        "https://github.com/ggerganov/whisper.cpp/raw/master/models/silero-vad.onnx");
+    const QString vadDest = dataDir + QStringLiteral("/silero-vad.onnx");
+
+    const bool needWhisper = findWhisperModel().isEmpty();
+    const bool needVad = findVadModel().isEmpty();
+
+    if (!needWhisper && !needVad) {
+        // All models present — init immediately
+        initWhisper();
+        initVad();
+        return;
+    }
+
+    // Track pending downloads
+    auto *pending = new std::atomic<int>(0);
+    if (needWhisper) ++(*pending);
+    if (needVad) ++(*pending);
+
+    auto tryInit = [this, pending]() {
+        if (--(*pending) == 0) {
+            delete pending;
+            initWhisper();
+            initVad();
+            emit modelDownloadStatus(QStringLiteral("Models ready."));
+
+            // Auto-start wake word if configured
+            if (m_settings->autoStartWakeWord() && m_whisperCtx && m_audioSource) {
+                m_wakeWordActive = true;
+                emit wakeWordActiveChanged();
+                startListening();
+                qDebug() << "[JARVIS] Wake word detection auto-started after model download.";
+            }
+        }
+    };
+
+    if (needWhisper) {
+        emit modelDownloadStatus(QStringLiteral("Downloading Whisper %1 model...").arg(whisperSize));
+        downloadModel(whisperUrl, whisperDest, tryInit);
+    }
+    if (needVad) {
+        emit modelDownloadStatus(QStringLiteral("Downloading VAD model..."));
+        downloadModel(vadUrl, vadDest, tryInit);
+    }
+}
+
+void JarvisAudio::downloadModel(const QString &url, const QString &destPath,
+                                 const std::function<void()> &onComplete)
+{
+    QNetworkRequest request{QUrl(url)};
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+
+    auto *reply = m_downloadManager->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, destPath, onComplete]() {
+        reply->deleteLater();
+
+        if (reply->error() != QNetworkReply::NoError) {
+            qWarning() << "[JARVIS] Model download failed:" << reply->errorString();
+            emit modelDownloadStatus(QStringLiteral("Download failed: %1").arg(reply->errorString()));
+            onComplete(); // Still call to decrement counter
+            return;
+        }
+
+        QFile file(destPath);
+        if (file.open(QIODevice::WriteOnly)) {
+            file.write(reply->readAll());
+            file.close();
+            qDebug() << "[JARVIS] Model downloaded:" << destPath
+                     << "(" << QFileInfo(destPath).size() / 1024 << "KB)";
+        } else {
+            qWarning() << "[JARVIS] Failed to write model:" << file.errorString();
+        }
+        onComplete();
+    });
 }
 
 std::vector<float> JarvisAudio::pcm16ToFloat(const QByteArray &audioData) const
