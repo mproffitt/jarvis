@@ -15,6 +15,7 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
     , m_settings(settings)
     , m_audioProcessTimer(new QTimer(this))
     , m_voiceCmdTimer(new QTimer(this))
+    , m_silenceTimer(new QTimer(this))
 {
     initAudioCapture();
     initWhisper();
@@ -26,6 +27,27 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
     m_voiceCmdTimer->setSingleShot(true);
     m_voiceCmdTimer->setInterval(m_settings->voiceCmdMaxSeconds() * 1000);
     connect(m_voiceCmdTimer, &QTimer::timeout, this, &JarvisAudio::processVoiceCommand);
+
+    // Silence detection — checks audio energy during voice command mode
+    m_silenceTimer->setInterval(SILENCE_CHECK_MS);
+    connect(m_silenceTimer, &QTimer::timeout, this, [this]() {
+        if (!m_voiceCommandMode) return;
+
+        // Check energy of the most recent audio chunk
+        const double level = m_audioLevel;
+        if (level > SILENCE_THRESHOLD) {
+            m_speechStarted = true;
+            m_silentChunks = 0;
+        } else if (m_speechStarted) {
+            ++m_silentChunks;
+            if (m_silentChunks >= SILENCE_CHUNKS_NEEDED) {
+                qDebug() << "[JARVIS] Silence detected, stopping voice command";
+                m_voiceCmdTimer->stop();
+                m_silenceTimer->stop();
+                processVoiceCommand();
+            }
+        }
+    });
 
     // Auto-start wake word detection
     if (m_settings->autoStartWakeWord() && m_whisperCtx && m_audioSource) {
@@ -257,19 +279,29 @@ QString JarvisAudio::transcribeAudio(const QByteArray &audioData)
 
     QMutexLocker lock(&m_whisperMutex);
 
+    // Trim trailing silence to reduce audio Whisper needs to process
+    int numSamples = static_cast<int>(floatSamples.size());
+    while (numSamples > JARVIS_SAMPLE_RATE / 2 && qAbs(floatSamples[numSamples - 1]) < 0.002f) {
+        --numSamples;
+    }
+    // Round up to nearest 100ms boundary
+    const int boundary = JARVIS_SAMPLE_RATE / 10;
+    numSamples = ((numSamples + boundary - 1) / boundary) * boundary;
+    if (numSamples > static_cast<int>(floatSamples.size()))
+        numSamples = static_cast<int>(floatSamples.size());
+
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     params.print_progress   = false;
     params.print_special    = false;
     params.print_realtime   = false;
     params.print_timestamps = false;
-    params.single_segment   = false;
+    params.single_segment   = true;
     params.no_context       = true;
     params.language         = nullptr; // auto-detect language
-    params.n_threads        = 2;
+    params.n_threads        = std::min(4, static_cast<int>(std::thread::hardware_concurrency()));
 
     const int ret = whisper_full(m_whisperCtx, params,
-                                 floatSamples.data(),
-                                 static_cast<int>(floatSamples.size()));
+                                 floatSamples.data(), numSamples);
     if (ret != 0) return {};
 
     QString result;
@@ -357,20 +389,29 @@ void JarvisAudio::startVoiceCommand()
     emit voiceCommandModeChanged();
 
     {
+        // Keep recent audio — the user may have started speaking right after the wake word
         QMutexLocker lock(&m_audioMutex);
-        m_audioBuffer.clear();
+        const int keepSize = JARVIS_SAMPLE_RATE * 2; // keep last ~1s
+        if (m_audioBuffer.size() > keepSize)
+            m_audioBuffer = m_audioBuffer.right(keepSize);
     }
 
     if (!m_listening) {
         startListening();
     }
 
+    // Reset silence detection state
+    m_silentChunks = 0;
+    m_speechStarted = false;
+
     m_voiceCmdTimer->start();
+    m_silenceTimer->start();
 }
 
 void JarvisAudio::stopVoiceCommand()
 {
     m_voiceCmdTimer->stop();
+    m_silenceTimer->stop();
     processVoiceCommand();
 }
 

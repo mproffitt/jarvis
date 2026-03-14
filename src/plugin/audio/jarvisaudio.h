@@ -10,7 +10,6 @@
 #include <QByteArray>
 #include <atomic>
 #include <vector>
-#include <thread>
 
 #include <whisper.h>
 
@@ -70,8 +69,17 @@ private:
     QIODevice *m_audioDevice{nullptr};
     QTimer *m_audioProcessTimer{nullptr};
     QTimer *m_voiceCmdTimer{nullptr};
+    QTimer *m_silenceTimer{nullptr};
     QByteArray m_audioBuffer;
     QMutex m_audioMutex;
+
+    // Silence detection state
+    int m_silentChunks{0};
+    bool m_speechStarted{false};
+    static constexpr int SILENCE_CHECK_MS = 80;       // Check every 80ms
+    static constexpr double SILENCE_THRESHOLD = 0.008; // Energy threshold (normalized 0-1)
+    static constexpr int SILENCE_CHUNKS_NEEDED = 8;    // 640ms of silence to stop
+    static constexpr int MIN_SPEECH_CHUNKS = 3;        // Need 240ms of speech before silence detection
 
     whisper_context *m_whisperCtx{nullptr};
     QMutex m_whisperMutex;
