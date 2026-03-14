@@ -485,6 +485,15 @@ PlasmoidItem {
                             }
                         }
 
+                        // Context window indicator
+                        Text {
+                            visible: chatView.count > 0
+                            text: Math.ceil(chatView.count / 2) + " / " + JarvisBackend.maxHistoryPairs + " conversations"
+                            color: chatView.count >= JarvisBackend.maxHistoryPairs * 2 ? "#e8a838" : "#3a5a6f"
+                            font { pixelSize: 8; family: monoFont }
+                            Layout.alignment: Qt.AlignRight
+                        }
+
                         // Processing bar
                         Rectangle {
                             Layout.fillWidth: true; height: 2; color: bgCard; radius: 1
