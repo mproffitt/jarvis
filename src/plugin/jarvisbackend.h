@@ -359,7 +359,15 @@ private:
         "- If asked to open an editor and write something, use write_file to create the file, then open_app to open it\n"
         "- Use .md extension for notes/documents, .txt for plain text, .sh for scripts\n"
         "- You can chain multiple actions\n"
-        "- If you don't need to perform any system action, just respond normally without ACTION blocks\n";
+        "- If you don't need to perform any system action, just respond normally without ACTION blocks\n\n"
+        "MUSIC:\n"
+        "When the user asks to play music, you MUST include an ACTION block to actually play it.\n"
+        "Say something brief, then ALWAYS add:\n"
+        "[ACTION:open_url] spotify:search:Artist Name Song Title\n"
+        "Example: User says 'play some jazz'\n"
+        "Response: Great choice! How about some Miles Davis.\n"
+        "[ACTION:open_url] spotify:search:Miles Davis Kind of Blue\n"
+        "NEVER just describe music without the ACTION block — the user wants to hear it.\n";
 
     // Action parsing and execution
     void parseAndExecuteActions(const QString &responseText);

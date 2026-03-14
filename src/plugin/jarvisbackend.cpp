@@ -546,6 +546,96 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
         return;
     }
 
+    // Music — "play X" asks LLM for a specific search term, then opens Spotify
+    static const QRegularExpression playRe(
+        QStringLiteral("^(?:play|put on|listen to|queue)\\s+(.+)"),
+        QRegularExpression::CaseInsensitiveOption);
+    const auto playMatch = playRe.match(command);
+    if (playMatch.hasMatch()) {
+        QString query = playMatch.captured(1).trimmed();
+        while (query.endsWith('.') || query.endsWith(','))
+            query.chop(1);
+        if (!query.isEmpty()) {
+            setStatus(QStringLiteral("Finding music: %1").arg(query));
+            speak(QStringLiteral("Let me find something for you."));
+
+            // Ask the LLM to convert the request into a specific search term
+            const QString prompt = QStringLiteral(
+                "The user wants to listen to: %1\n"
+                "Respond with ONLY a Spotify search query — artist and/or song name. "
+                "Nothing else, no explanation, no punctuation, just the search term. "
+                "If the request is vague like 'some jazz', pick a specific well-known artist or track.").arg(query);
+
+            QJsonObject body;
+            body[QStringLiteral("messages")] = QJsonArray{
+                QJsonObject{{QStringLiteral("role"), QStringLiteral("user")},
+                            {QStringLiteral("content"), prompt}}};
+            body[QStringLiteral("max_tokens")] = 50;
+            body[QStringLiteral("temperature")] = 0.9;
+            body[QStringLiteral("stream")] = false;
+
+            const QString modelId = m_settings->llmModelId();
+            if (!modelId.isEmpty())
+                body[QStringLiteral("model")] = modelId;
+
+            QUrl url(m_settings->chatCompletionsUrl());
+            QNetworkRequest request(url);
+            request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+            request.setTransferTimeout(10000);
+
+            if (m_settings->providerNeedsApiKey()) {
+                const QString apiKey = m_settings->activeApiKey();
+                if (m_settings->isClaudeProvider()) {
+                    if (apiKey.startsWith(QStringLiteral("sk-ant-oat"))) {
+                        request.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+                        request.setRawHeader("anthropic-beta", "oauth-2025-04-20");
+                    } else {
+                        request.setRawHeader("x-api-key", apiKey.toUtf8());
+                    }
+                    request.setRawHeader("anthropic-version", "2023-06-01");
+                } else {
+                    request.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+                }
+            }
+
+            auto *reply = m_networkManager->post(request, QJsonDocument(body).toJson());
+            connect(reply, &QNetworkReply::finished, this, [this, reply, query]() {
+                reply->deleteLater();
+                QString searchTerm = query; // fallback to original
+
+                if (reply->error() == QNetworkReply::NoError) {
+                    const auto doc = QJsonDocument::fromJson(reply->readAll());
+                    // OpenAI/Ollama format
+                    QString text = doc.object()[QStringLiteral("choices")].toArray()
+                        .first().toObject()[QStringLiteral("message")].toObject()
+                        [QStringLiteral("content")].toString().trimmed();
+                    // Claude format
+                    if (text.isEmpty()) {
+                        const auto content = doc.object()[QStringLiteral("content")].toArray();
+                        for (const auto &c : content) {
+                            if (c.toObject()[QStringLiteral("type")] == QStringLiteral("text"))
+                                text = c.toObject()[QStringLiteral("text")].toString().trimmed();
+                        }
+                    }
+                    if (!text.isEmpty()) searchTerm = text;
+                }
+
+                // Clean up the search term
+                while (searchTerm.endsWith('.') || searchTerm.endsWith('"') || searchTerm.endsWith('\''))
+                    searchTerm.chop(1);
+                while (searchTerm.startsWith('"') || searchTerm.startsWith('\''))
+                    searchTerm = searchTerm.mid(1);
+                searchTerm = searchTerm.trimmed();
+
+                const QString uri = QStringLiteral("spotify:search:%1").arg(searchTerm);
+                QProcess::startDetached(QStringLiteral("xdg-open"), {uri});
+                speak(QStringLiteral("Playing %1").arg(searchTerm));
+                setStatus(QStringLiteral("Spotify: %1").arg(searchTerm));
+            });
+            return;
+        }
+    }
+
     // Otherwise send to LLM
     sendMessage(command);
 }
