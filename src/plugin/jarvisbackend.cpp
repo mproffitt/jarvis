@@ -120,6 +120,7 @@ void JarvisBackend::connectModuleSignals()
     });
     connect(m_settings, &JarvisSettings::openaiApiKeyChanged, this, &JarvisBackend::openaiApiKeyChanged);
     connect(m_settings, &JarvisSettings::geminiApiKeyChanged, this, &JarvisBackend::geminiApiKeyChanged);
+    connect(m_settings, &JarvisSettings::claudeApiKeyChanged, this, &JarvisBackend::claudeApiKeyChanged);
     connect(m_settings, &JarvisSettings::llmModelIdChanged, this, &JarvisBackend::llmModelIdChanged);
     connect(m_settings, &JarvisSettings::currentModelNameChanged, this, [this]() {
         emit currentModelNameChanged();
@@ -211,6 +212,7 @@ QString JarvisBackend::llmProvider() const { return m_settings->llmProvider(); }
 QString JarvisBackend::llmServerUrl() const { return m_settings->llmServerUrl(); }
 QString JarvisBackend::openaiApiKey() const { return m_settings->openaiApiKey(); }
 QString JarvisBackend::geminiApiKey() const { return m_settings->geminiApiKey(); }
+QString JarvisBackend::claudeApiKey() const { return m_settings->claudeApiKey(); }
 QString JarvisBackend::llmModelId() const { return m_settings->llmModelId(); }
 QString JarvisBackend::currentModelName() const { return m_settings->currentModelName(); }
 QString JarvisBackend::currentVoiceName() const { return m_settings->currentVoiceName(); }
@@ -247,6 +249,7 @@ void JarvisBackend::setLlmProvider(const QString &provider) { m_settings->setLlm
 void JarvisBackend::setLlmServerUrl(const QString &url) { m_settings->setLlmServerUrl(url); }
 void JarvisBackend::setOpenaiApiKey(const QString &key) { m_settings->setOpenaiApiKey(key); }
 void JarvisBackend::setGeminiApiKey(const QString &key) { m_settings->setGeminiApiKey(key); }
+void JarvisBackend::setClaudeApiKey(const QString &key) { m_settings->setClaudeApiKey(key); }
 void JarvisBackend::setLlmModelId(const QString &modelId) { m_settings->setLlmModelId(modelId); }
 void JarvisBackend::refreshOllamaModels()
 {
@@ -353,6 +356,8 @@ bool JarvisBackend::isOAuthLoggedIn() { return m_settings->isOAuthLoggedIn(); }
 void JarvisBackend::oauthLogin(const QString &provider) { m_settings->oauthLogin(provider); }
 void JarvisBackend::oauthLogout(const QString &provider) { m_settings->oauthLogout(provider); }
 void JarvisBackend::cancelOAuthLogin() { m_settings->cancelOAuthLogin(); }
+void JarvisBackend::completeClaudeLogin(const QString &code) { m_settings->completeClaudeLogin(code); }
+bool JarvisBackend::awaitingClaudeCode() const { return m_settings->awaitingClaudeCode(); }
 
 void JarvisBackend::addCommand(const QString &phrase, const QString &action, const QString &type) { m_commands->addCommand(phrase, action, type); }
 void JarvisBackend::removeCommand(int index) { m_commands->removeCommand(index); }
@@ -527,7 +532,7 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
         request.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
 
     } else {
-        // Standard OpenAI-compatible API
+        // Standard OpenAI-compatible / Claude API
         QJsonArray messages = buildConversationContext();
         requestBody[QStringLiteral("messages")] = messages;
         requestBody[QStringLiteral("temperature")] = 0.7;
@@ -536,6 +541,8 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
 
         if (m_settings->providerNeedsModelInRequest()) {
             QString modelId = m_settings->llmModelId();
+            if (modelId.isEmpty() && m_settings->isClaudeProvider())
+                modelId = QStringLiteral("claude-sonnet-4-20250514");
             if (modelId.isEmpty()) {
                 m_processing = false;
                 emit processingChanged();
@@ -545,6 +552,10 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
                 return;
             }
             requestBody[QStringLiteral("model")] = modelId;
+        }
+
+        if (m_settings->isClaudeProvider()) {
+            requestBody[QStringLiteral("system")] = buildSystemPrompt();
         }
 
         url = QUrl(m_settings->chatCompletionsUrl());
@@ -567,8 +578,19 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
                 emit errorOccurred("No API key configured. Please set one in settings.");
                 return;
             }
-            request.setRawHeader("Authorization",
-                QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+            if (m_settings->isClaudeProvider()) {
+                // OAuth tokens (sk-ant-oat*) use Bearer auth + beta header; API keys use x-api-key
+                if (apiKey.startsWith(QStringLiteral("sk-ant-oat"))) {
+                    request.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+                    request.setRawHeader("anthropic-beta", "oauth-2025-04-20");
+                } else {
+                    request.setRawHeader("x-api-key", apiKey.toUtf8());
+                }
+                request.setRawHeader("anthropic-version", "2023-06-01");
+            } else {
+                request.setRawHeader("Authorization",
+                    QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+            }
         }
     }
 
@@ -602,10 +624,13 @@ QJsonArray JarvisBackend::buildConversationContext() const
 {
     QJsonArray messages;
 
-    QJsonObject systemMsg;
-    systemMsg[QStringLiteral("role")] = QStringLiteral("system");
-    systemMsg[QStringLiteral("content")] = buildSystemPrompt();
-    messages.append(systemMsg);
+    // For Claude, the system prompt is top-level (not in messages array)
+    if (!m_settings->isClaudeProvider()) {
+        QJsonObject systemMsg;
+        systemMsg[QStringLiteral("role")] = QStringLiteral("system");
+        systemMsg[QStringLiteral("content")] = buildSystemPrompt();
+        messages.append(systemMsg);
+    }
 
     for (const auto &[role, content] : m_conversationHistory) {
         QJsonObject msg;
@@ -636,8 +661,17 @@ QString JarvisBackend::extractStreamToken(const QString &jsonStr) const
         return parts[0].toObject()[QStringLiteral("text")].toString();
     }
 
-    // OpenAI-compatible format (llama.cpp, Ollama, OpenAI, Gemini OpenAI-compat):
-    // {"choices":[{"delta":{"content":"token"}}]}
+    // Claude format: {"type":"content_block_delta","delta":{"type":"text_delta","text":"token"}}
+    if (m_settings->isClaudeProvider()) {
+        const QString type = obj[QStringLiteral("type")].toString();
+        if (type == QStringLiteral("content_block_delta")) {
+            return obj[QStringLiteral("delta")].toObject()
+                      [QStringLiteral("text")].toString();
+        }
+        return {};
+    }
+
+    // OpenAI-compatible format: {"choices":[{"delta":{"content":"token"}}]}
     const auto choices = obj[QStringLiteral("choices")].toArray();
     if (choices.isEmpty()) return {};
     return choices[0].toObject()[QStringLiteral("delta")].toObject()
@@ -702,20 +736,16 @@ void JarvisBackend::onLlmStreamReadyRead()
                 continue;
             }
 
+            // Skip SSE event-type lines (e.g. "event: content_block_delta")
             if (!line.startsWith(QStringLiteral("data: "))) {
                 continue;
             }
 
             const QString content = extractStreamToken(line.mid(6));
-
             if (!content.isEmpty()) {
                 m_fullStreamedResponse += content;
-
-                // Update streaming response for QML (strip action blocks for display)
                 m_streamingResponse = stripActionsFromResponse(m_fullStreamedResponse);
                 emit streamingResponseChanged();
-
-                // Try to speak any complete sentences that haven't been spoken yet
                 trySpeakCompleteSentences();
             }
         }
@@ -796,6 +826,7 @@ void JarvisBackend::onLlmStreamFinished()
 
     const auto error = m_streamReply->error();
     const QString errorString = m_streamReply->errorString();
+    const int httpStatus = m_streamReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
     // Process any remaining data before cleanup
     const QByteArray remaining = m_streamReply->readAll();
@@ -810,6 +841,7 @@ void JarvisBackend::onLlmStreamFinished()
     emit processingChanged();
 
     if (error != QNetworkReply::NoError && m_fullStreamedResponse.isEmpty()) {
+        qWarning() << "[JARVIS] LLM request failed:" << httpStatus << errorString;
         const auto errorMsg = QStringLiteral("I'm experiencing a connection issue, Sir: %1")
                                   .arg(errorString);
         setStatus(errorMsg);
@@ -845,10 +877,13 @@ void JarvisBackend::checkConnection()
 {
     // Cloud providers — don't ping the server, just check if credentials exist
     if (m_settings->providerNeedsApiKey()) {
+        // Avoid calling activeApiKey() here as it triggers token refresh attempts
         const bool hasOAuth = m_settings->hasOAuthCredentials();
-        const bool hasKey = m_settings->isGeminiOAuthMode()
-            ? true  // OAuth creds checked via hasOAuth
-            : !m_settings->geminiApiKey().isEmpty() || !m_settings->openaiApiKey().isEmpty();
+        const bool hasKey = m_settings->isClaudeProvider()
+            ? !m_settings->claudeApiKey().isEmpty()
+            : m_settings->isGeminiOAuthMode()
+                ? true  // OAuth creds checked via hasOAuth
+                : !m_settings->geminiApiKey().isEmpty() || !m_settings->openaiApiKey().isEmpty();
         const bool wasConnected = m_connected;
 
         m_connected = hasKey || hasOAuth;

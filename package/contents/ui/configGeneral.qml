@@ -66,7 +66,8 @@ Item {
                 model: [
                     { value: "llamacpp", text: "llama.cpp (local)" },
                     { value: "ollama",   text: "Ollama (local)" },
-                    { value: "gemini",   text: "Google Gemini" }
+                    { value: "gemini",   text: "Google Gemini" },
+                    { value: "claude",   text: "Anthropic (Claude)" }
                 ]
                 textRole: "text"
                 valueRole: "value"
@@ -90,6 +91,7 @@ Item {
                         var p = JarvisBackend.llmProvider
                         if (p === "ollama") return "http://127.0.0.1:11434"
                         if (p === "gemini") return "https://generativelanguage.googleapis.com/v1beta/openai"
+                        if (p === "claude") return "https://api.anthropic.com"
                         return "http://127.0.0.1:8080"
                     }
                     Layout.fillWidth: true
@@ -170,6 +172,127 @@ Item {
                     flat: true
                     onClicked: JarvisBackend.oauthLogout("gemini")
                 }
+            }
+
+            // Claude API Key
+            RowLayout {
+                Kirigami.FormData.label: i18n("Claude API Key:")
+                visible: JarvisBackend.llmProvider === "claude"
+                spacing: Kirigami.Units.smallSpacing
+                TextField {
+                    id: claudeKeyField
+                    text: JarvisBackend.claudeApiKey
+                    placeholderText: i18n("sk-ant-... (optional if logged in)")
+                    echoMode: TextInput.Password
+                    Layout.fillWidth: true
+                    onAccepted: JarvisBackend.setClaudeApiKey(text)
+                }
+                Button {
+                    text: i18n("Save")
+                    icon.name: "dialog-ok-apply"
+                    onClicked: JarvisBackend.setClaudeApiKey(claudeKeyField.text)
+                }
+            }
+
+            // Claude OAuth login
+            RowLayout {
+                Kirigami.FormData.label: i18n("Claude Account:")
+                visible: JarvisBackend.llmProvider === "claude" && !JarvisBackend.awaitingClaudeCode
+                spacing: Kirigami.Units.smallSpacing
+                Kirigami.Icon {
+                    visible: JarvisBackend.oauthLoggedIn
+                    source: "emblem-default"
+                    implicitWidth: Kirigami.Units.iconSizes.small
+                    implicitHeight: Kirigami.Units.iconSizes.small
+                }
+                Label {
+                    visible: JarvisBackend.oauthLoggedIn
+                    text: i18n("Logged in")
+                    color: Kirigami.Theme.positiveTextColor
+                }
+                Button {
+                    text: JarvisBackend.oauthLoggedIn ? i18n("Re-login") : i18n("Login with Claude")
+                    icon.name: "go-next"
+                    onClicked: JarvisBackend.oauthLogin("claude")
+                }
+                Button {
+                    text: i18n("Logout")
+                    icon.name: "system-log-out"
+                    visible: JarvisBackend.oauthLoggedIn
+                    flat: true
+                    onClicked: JarvisBackend.oauthLogout("claude")
+                }
+            }
+
+            // Claude OAuth code paste field
+            ColumnLayout {
+                visible: JarvisBackend.llmProvider === "claude" && JarvisBackend.awaitingClaudeCode
+                Layout.fillWidth: true
+                spacing: Kirigami.Units.smallSpacing
+
+                Label {
+                    text: i18n("Authorize in your browser, then paste the code below:")
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
+
+                RowLayout {
+                    Kirigami.FormData.label: i18n("Auth Code:")
+                    spacing: Kirigami.Units.smallSpacing
+                    TextField {
+                        id: claudeCodeField
+                        placeholderText: i18n("Paste authorization code here...")
+                        Layout.fillWidth: true
+                        onAccepted: {
+                            if (text.length > 0) {
+                                JarvisBackend.completeClaudeLogin(text)
+                                text = ""
+                            }
+                        }
+                    }
+                    Button {
+                        text: i18n("Submit")
+                        icon.name: "dialog-ok-apply"
+                        enabled: claudeCodeField.text.length > 0
+                        onClicked: {
+                            JarvisBackend.completeClaudeLogin(claudeCodeField.text)
+                            claudeCodeField.text = ""
+                        }
+                    }
+                    Button {
+                        text: i18n("Cancel")
+                        icon.name: "dialog-cancel"
+                        flat: true
+                        onClicked: JarvisBackend.cancelOAuthLogin()
+                    }
+                }
+            }
+
+            Label {
+                visible: JarvisBackend.llmProvider === "openai"
+                text: i18n("API key stored in KDE Wallet. Falls back to OPENAI_API_KEY environment variable.")
+                color: Kirigami.Theme.disabledTextColor
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+
+            Label {
+                visible: JarvisBackend.llmProvider === "gemini"
+                text: i18n("Login with your Google account to use your Gemini subscription, or enter an API key. Tokens refresh automatically. Falls back to GEMINI_API_KEY env var.")
+                color: Kirigami.Theme.disabledTextColor
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+
+            Label {
+                visible: JarvisBackend.llmProvider === "claude"
+                text: i18n("Login with your Claude account to use your subscription, or enter an API key. Tokens refresh automatically. Falls back to ANTHROPIC_API_KEY env var.")
+                color: Kirigami.Theme.disabledTextColor
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
             }
 
             // Model selector for cloud providers (dropdown)
@@ -267,33 +390,6 @@ Item {
                     ToolTip.visible: hovered
                     onClicked: JarvisBackend.refreshOllamaModels()
                 }
-            }
-
-            Label {
-                visible: JarvisBackend.llmProvider === "openai"
-                text: i18n("API key stored in KDE Wallet. Falls back to OPENAI_API_KEY environment variable.")
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-
-            Label {
-                visible: JarvisBackend.llmProvider === "gemini"
-                text: i18n("Login with your Google account to use your Gemini subscription, or enter an API key. Tokens refresh automatically. Falls back to GEMINI_API_KEY env var.")
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-
-            Label {
-                visible: JarvisBackend.llmProvider === "claude"
-                text: i18n("Claude API key support coming in a future update. Falls back to ANTHROPIC_API_KEY env var.")
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
             }
 
             RowLayout {

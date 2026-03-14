@@ -66,6 +66,7 @@ class JarvisBackend : public QObject
     Q_PROPERTY(QString llmServerUrl READ llmServerUrl NOTIFY llmServerUrlChanged)
     Q_PROPERTY(QString openaiApiKey READ openaiApiKey NOTIFY openaiApiKeyChanged)
     Q_PROPERTY(QString geminiApiKey READ geminiApiKey NOTIFY geminiApiKeyChanged)
+    Q_PROPERTY(QString claudeApiKey READ claudeApiKey NOTIFY claudeApiKeyChanged)
     Q_PROPERTY(QString llmModelId READ llmModelId NOTIFY llmModelIdChanged)
     Q_PROPERTY(QString currentModelName READ currentModelName NOTIFY currentModelNameChanged)
     Q_PROPERTY(QString currentVoiceName READ currentVoiceName NOTIFY currentVoiceNameChanged)
@@ -91,6 +92,7 @@ class JarvisBackend : public QObject
 
     // OAuth login status
     Q_PROPERTY(bool oauthLoggedIn READ isOAuthLoggedIn NOTIFY oauthStatusChanged)
+    Q_PROPERTY(bool awaitingClaudeCode READ awaitingClaudeCode NOTIFY oauthStatusChanged)
 
 public:
     explicit JarvisBackend(QObject *parent = nullptr);
@@ -136,6 +138,7 @@ public:
     [[nodiscard]] QString llmServerUrl() const;
     [[nodiscard]] QString openaiApiKey() const;
     [[nodiscard]] QString geminiApiKey() const;
+    [[nodiscard]] QString claudeApiKey() const;
     [[nodiscard]] QString llmModelId() const;
     [[nodiscard]] QString currentModelName() const;
     [[nodiscard]] QString currentVoiceName() const;
@@ -158,6 +161,7 @@ public:
 
     // OAuth (delegated)
     [[nodiscard]] bool isOAuthLoggedIn();
+    [[nodiscard]] bool awaitingClaudeCode() const;
 
     // Commands (delegated)
     [[nodiscard]] QVariantList commandMappings() const;
@@ -189,6 +193,7 @@ public:
     Q_INVOKABLE void setLlmServerUrl(const QString &url);
     Q_INVOKABLE void setOpenaiApiKey(const QString &key);
     Q_INVOKABLE void setGeminiApiKey(const QString &key);
+    Q_INVOKABLE void setClaudeApiKey(const QString &key);
     Q_INVOKABLE void setLlmModelId(const QString &modelId);
     Q_INVOKABLE void refreshOllamaModels();
     Q_INVOKABLE void refreshCloudModels();
@@ -214,6 +219,7 @@ public:
     Q_INVOKABLE void oauthLogin(const QString &provider);
     Q_INVOKABLE void oauthLogout(const QString &provider);
     Q_INVOKABLE void cancelOAuthLogin();
+    Q_INVOKABLE void completeClaudeLogin(const QString &code);
 
     // Commands invokables
     Q_INVOKABLE void addCommand(const QString &phrase, const QString &action, const QString &type);
@@ -246,6 +252,7 @@ signals:
     void llmServerUrlChanged();
     void openaiApiKeyChanged();
     void geminiApiKeyChanged();
+    void claudeApiKeyChanged();
     void llmModelIdChanged();
     void currentModelNameChanged();
     void currentVoiceNameChanged();

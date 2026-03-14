@@ -530,6 +530,79 @@ void JarvisSettings::fetchCloudModels()
     if (m_llmProvider == QStringLiteral("llamacpp") || m_llmProvider == QStringLiteral("ollama"))
         return;
 
+    const QString apiKey = activeApiKey();
+
+    if (m_llmProvider == QStringLiteral("claude")) {
+        QUrl url(m_llmServerUrl + QStringLiteral("/v1/models"));
+        QNetworkRequest request(url);
+        if (apiKey.startsWith(QStringLiteral("sk-ant-oat"))) {
+            request.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+            request.setRawHeader("anthropic-beta", "oauth-2025-04-20");
+        } else {
+            request.setRawHeader("x-api-key", apiKey.toUtf8());
+        }
+        request.setRawHeader("anthropic-version", "2023-06-01");
+
+        auto *reply = m_networkManager->get(request);
+        connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+            reply->deleteLater();
+            if (reply->error() != QNetworkReply::NoError) return;
+
+            const auto doc = QJsonDocument::fromJson(reply->readAll());
+            const auto data = doc.object()[QStringLiteral("data")].toArray();
+
+            m_cloudModelChoices.clear();
+            for (const auto &val : data) {
+                const auto obj = val.toObject();
+                const QString id = obj[QStringLiteral("id")].toString();
+                const QString name = obj[QStringLiteral("display_name")].toString();
+                m_cloudModelChoices.append(QVariantMap{
+                    {QStringLiteral("id"), id},
+                    {QStringLiteral("name"), name.isEmpty() ? id : name},
+                });
+            }
+            emit cloudModelChoicesChanged();
+        });
+        return;
+    }
+
+    if (m_llmProvider == QStringLiteral("openai")) {
+        QUrl url(m_llmServerUrl + QStringLiteral("/v1/models"));
+        QNetworkRequest request(url);
+        request.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+
+        auto *reply = m_networkManager->get(request);
+        connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+            reply->deleteLater();
+            if (reply->error() != QNetworkReply::NoError) return;
+
+            const auto doc = QJsonDocument::fromJson(reply->readAll());
+            const auto data = doc.object()[QStringLiteral("data")].toArray();
+
+            m_cloudModelChoices.clear();
+            for (const auto &val : data) {
+                const auto obj = val.toObject();
+                const QString id = obj[QStringLiteral("id")].toString();
+                // Only show chat models, skip embedding/tts/etc
+                if (id.startsWith(QStringLiteral("gpt")) || id.startsWith(QStringLiteral("o1"))
+                    || id.startsWith(QStringLiteral("o3")) || id.startsWith(QStringLiteral("o4"))) {
+                    m_cloudModelChoices.append(QVariantMap{
+                        {QStringLiteral("id"), id},
+                        {QStringLiteral("name"), id},
+                    });
+                }
+            }
+            // Sort by name
+            std::sort(m_cloudModelChoices.begin(), m_cloudModelChoices.end(),
+                [](const QVariant &a, const QVariant &b) {
+                    return a.toMap()[QStringLiteral("name")].toString()
+                         < b.toMap()[QStringLiteral("name")].toString();
+                });
+            emit cloudModelChoicesChanged();
+        });
+        return;
+    }
+
     if (m_llmProvider == QStringLiteral("gemini")) {
         // Gemini Cloud Code doesn't have a models list endpoint — use hardcoded
         m_cloudModelChoices = {
@@ -541,26 +614,7 @@ void JarvisSettings::fetchCloudModels()
                         {QStringLiteral("name"), QStringLiteral("Gemini 2.0 Flash")}},
         };
         emit cloudModelChoicesChanged();
-        return;
     }
-
-    // Cloud model choices — hardcoded defaults for now
-    if (m_llmProvider == QStringLiteral("openai")) {
-        m_cloudModelChoices = {
-            QVariantMap{{QStringLiteral("id"), QStringLiteral("gpt-4o")},
-                        {QStringLiteral("name"), QStringLiteral("GPT-4o")}},
-            QVariantMap{{QStringLiteral("id"), QStringLiteral("gpt-4o-mini")},
-                        {QStringLiteral("name"), QStringLiteral("GPT-4o Mini")}},
-        };
-    } else if (m_llmProvider == QStringLiteral("claude")) {
-        m_cloudModelChoices = {
-            QVariantMap{{QStringLiteral("id"), QStringLiteral("claude-sonnet-4-20250514")},
-                        {QStringLiteral("name"), QStringLiteral("Claude Sonnet 4")}},
-            QVariantMap{{QStringLiteral("id"), QStringLiteral("claude-3-5-sonnet-20241022")},
-                        {QStringLiteral("name"), QStringLiteral("Claude 3.5 Sonnet")}},
-        };
-    }
-    emit cloudModelChoicesChanged();
 }
 
 void JarvisSettings::fetchOllamaModels()
