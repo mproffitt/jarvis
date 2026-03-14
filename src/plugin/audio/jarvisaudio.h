@@ -33,6 +33,7 @@ public:
     void toggleWakeWord();
     void startVoiceCommand();
     void stopVoiceCommand();
+    void setTtsSpeaking(bool speaking);
 
     // Dynamic settings
     void updateWakeBufferInterval(int seconds);
@@ -90,6 +91,7 @@ private:
     std::atomic<bool> m_listening{false};
     std::atomic<bool> m_wakeWordActive{false};
     std::atomic<bool> m_voiceCommandMode{false};
+    std::atomic<bool> m_ttsSpeaking{false};
     double m_audioLevel{0.0};
     QString m_lastTranscription;
 

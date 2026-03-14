@@ -181,8 +181,19 @@ void JarvisAudio::stopListening()
 // Wake Word Detection
 // ─────────────────────────────────────────────
 
+void JarvisAudio::setTtsSpeaking(bool speaking)
+{
+    m_ttsSpeaking = speaking;
+    if (speaking) {
+        // Clear audio buffer so we don't process TTS output as speech
+        QMutexLocker lock(&m_audioMutex);
+        m_audioBuffer.clear();
+    }
+}
+
 void JarvisAudio::processAudioBuffer()
 {
+    if (m_ttsSpeaking.load()) return; // Don't process while TTS is playing
     if (m_micMonitor && m_micMonitor->isMicBusy()) return;
     if (m_voiceCommandMode) return;
     if (!m_wakeWordActive || !m_whisperCtx) return;

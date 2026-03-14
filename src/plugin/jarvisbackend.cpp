@@ -82,6 +82,8 @@ void JarvisBackend::connectModuleSignals()
     // TTS → Backend
     connect(m_tts, &JarvisTts::speakingChanged, this, [this]() {
         emit speakingChanged();
+        // Mute wake word detection while TTS is playing to prevent echo
+        m_audio->setTtsSpeaking(m_tts->isSpeaking());
         // Continuous conversation: re-enter voice command mode after TTS finishes
         if (!m_tts->isSpeaking() && m_conversationActive
             && !m_processing && !m_audio->isVoiceCommandMode()) {
