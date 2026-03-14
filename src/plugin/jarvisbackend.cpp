@@ -1017,6 +1017,54 @@ void JarvisBackend::clearHistory()
     setStatus("Memory cleared. Fresh start.");
 }
 
+void JarvisBackend::exportHistory(const QString &path)
+{
+    QJsonArray arr;
+    for (const auto &[role, content] : m_conversationHistory) {
+        arr.append(QJsonObject{
+            {QStringLiteral("role"), role},
+            {QStringLiteral("content"), content},
+        });
+    }
+    QFile file(path);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        file.write(QJsonDocument(arr).toJson());
+        setStatus(QStringLiteral("History exported to %1").arg(path));
+    } else {
+        setStatus(QStringLiteral("Failed to export: %1").arg(file.errorString()));
+    }
+}
+
+void JarvisBackend::importHistory(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        setStatus(QStringLiteral("Failed to import: %1").arg(file.errorString()));
+        return;
+    }
+    const auto doc = QJsonDocument::fromJson(file.readAll());
+    if (!doc.isArray()) {
+        setStatus("Failed to import: invalid format.");
+        return;
+    }
+
+    m_chatHistory.clear();
+    m_conversationHistory.clear();
+
+    const auto arr = doc.array();
+    for (const auto &val : arr) {
+        const auto obj = val.toObject();
+        const QString role = obj[QStringLiteral("role")].toString();
+        const QString content = obj[QStringLiteral("content")].toString();
+        if (role.isEmpty() || content.isEmpty()) continue;
+        m_conversationHistory.push_back({role, content});
+        m_chatHistory.append(QStringLiteral("%1|%2").arg(role, content));
+    }
+    emit chatHistoryChanged();
+    saveChatHistory();
+    setStatus(QStringLiteral("Imported %1 messages.").arg(arr.size()));
+}
+
 void JarvisBackend::setStatus(const QString &status)
 {
     if (m_statusText != status) {

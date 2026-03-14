@@ -176,6 +176,8 @@ public:
     Q_INVOKABLE void speak(const QString &text);
     Q_INVOKABLE void stopSpeaking();
     Q_INVOKABLE void clearHistory();
+    Q_INVOKABLE void exportHistory(const QString &path);
+    Q_INVOKABLE void importHistory(const QString &path);
     Q_INVOKABLE void checkConnection();
 
     // Voice command

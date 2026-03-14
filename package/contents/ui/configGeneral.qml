@@ -1,6 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import Qt.labs.platform 1.1 as Labs
 import org.kde.kirigami 2.20 as Kirigami
 import org.kde.plasma.jarvis 1.0
 
@@ -766,6 +767,63 @@ Item {
                 color: Kirigami.Theme.disabledTextColor
                 font.pointSize: Kirigami.Theme.smallFont.pointSize
             }
+
+            RowLayout {
+                Kirigami.FormData.label: i18n("History:")
+                spacing: Kirigami.Units.smallSpacing
+                Button {
+                    text: i18n("Export")
+                    icon.name: "document-save"
+                    onClicked: exportDialog.open()
+                }
+                Button {
+                    text: i18n("Import")
+                    icon.name: "document-open"
+                    onClicked: importDialog.open()
+                }
+            }
+        }
+
+        // File dialogs for export/import (declared at page level)
+        Loader {
+            id: exportDialogLoader
+            active: false
+            sourceComponent: Component {
+                Labs.FileDialog {
+                    id: exportDlg
+                    title: i18n("Export Chat History")
+                    fileMode: Labs.FileDialog.SaveFile
+                    nameFilters: ["JSON files (*.json)"]
+                    currentFile: "file:///tmp/jarvis_history.json"
+                    onAccepted: { JarvisBackend.exportHistory(selectedFile.toString().replace("file://", "")); exportDialogLoader.active = false }
+                    onRejected: exportDialogLoader.active = false
+                    Component.onCompleted: open()
+                }
+            }
+        }
+        Loader {
+            id: importDialogLoader
+            active: false
+            sourceComponent: Component {
+                Labs.FileDialog {
+                    id: importDlg
+                    title: i18n("Import Chat History")
+                    fileMode: Labs.FileDialog.OpenFile
+                    nameFilters: ["JSON files (*.json)"]
+                    onAccepted: { JarvisBackend.importHistory(selectedFile.toString().replace("file://", "")); importDialogLoader.active = false }
+                    onRejected: importDialogLoader.active = false
+                    Component.onCompleted: open()
+                }
+            }
+        }
+
+        QtObject {
+            id: exportDialog
+            function open() { exportDialogLoader.active = true }
+        }
+        QtObject {
+            id: importDialog
+            function open() { importDialogLoader.active = true }
         }
 
         // ════════════════════════════════════════
