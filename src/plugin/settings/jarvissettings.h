@@ -51,6 +51,7 @@ public:
     [[nodiscard]] int voiceCmdMaxSeconds() const { return m_voiceCmdMaxSeconds; }
     [[nodiscard]] int silenceTimeoutMs() const { return m_silenceTimeoutMs; }
     [[nodiscard]] bool autoStartWakeWord() const { return m_autoStartWakeWord; }
+    [[nodiscard]] bool noiseSuppressionEnabled() const { return m_noiseSuppression; }
     [[nodiscard]] QString whisperModel() const { return m_whisperModel; }
     [[nodiscard]] QString wakeWord() const { return m_wakeWord; }
     [[nodiscard]] bool continuousMode() const { return m_continuousMode; }
@@ -75,6 +76,7 @@ public:
     void setVoiceCmdMaxSeconds(int seconds);
     void setSilenceTimeoutMs(int ms);
     void setAutoStartWakeWord(bool enabled);
+    void setNoiseSuppression(bool enabled);
     void setWhisperModel(const QString &model);
     void setWakeWord(const QString &word);
     void setContinuousMode(bool enabled);
@@ -127,6 +129,7 @@ signals:
     void voiceCmdMaxSecondsChanged();
     void silenceTimeoutMsChanged();
     void autoStartWakeWordChanged();
+    void noiseSuppressionChanged();
     void whisperModelChanged();
     void wakeWordChanged();
     void continuousModeChanged();
@@ -178,6 +181,7 @@ private:
     int m_voiceCmdMaxSeconds{8};
     int m_silenceTimeoutMs{640};
     bool m_autoStartWakeWord{true};
+    bool m_noiseSuppression{true};
     QString m_whisperModel{QStringLiteral("tiny")};
     QString m_wakeWord;
     bool m_continuousMode{false};

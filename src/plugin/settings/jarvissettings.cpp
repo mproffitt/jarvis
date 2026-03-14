@@ -161,6 +161,7 @@ void JarvisSettings::loadSettings()
     m_voiceCmdMaxSeconds = m_settings.value(QStringLiteral("audio/voiceCmdMaxSeconds"), 8).toInt();
     m_silenceTimeoutMs = m_settings.value(QStringLiteral("audio/silenceTimeoutMs"), 640).toInt();
     m_autoStartWakeWord = m_settings.value(QStringLiteral("audio/autoStartWakeWord"), true).toBool();
+    m_noiseSuppression = m_settings.value(QStringLiteral("audio/noiseSuppression"), true).toBool();
     m_whisperModel = m_settings.value(QStringLiteral("audio/whisperModel"), QStringLiteral("tiny")).toString();
     m_wakeWord = m_settings.value(QStringLiteral("audio/wakeWord"), QStringLiteral("jarvis")).toString();
     m_continuousMode = m_settings.value(QStringLiteral("audio/continuousMode"), false).toBool();
@@ -201,6 +202,7 @@ void JarvisSettings::saveSettings()
     m_settings.setValue(QStringLiteral("audio/voiceCmdMaxSeconds"), m_voiceCmdMaxSeconds);
     m_settings.setValue(QStringLiteral("audio/silenceTimeoutMs"), m_silenceTimeoutMs);
     m_settings.setValue(QStringLiteral("audio/autoStartWakeWord"), m_autoStartWakeWord);
+    m_settings.setValue(QStringLiteral("audio/noiseSuppression"), m_noiseSuppression);
     m_settings.setValue(QStringLiteral("audio/whisperModel"), m_whisperModel);
     m_settings.setValue(QStringLiteral("audio/wakeWord"), m_wakeWord);
     m_settings.setValue(QStringLiteral("audio/continuousMode"), m_continuousMode);
@@ -429,6 +431,15 @@ void JarvisSettings::setAutoStartWakeWord(bool enabled)
         m_autoStartWakeWord = enabled;
         saveSettings();
         emit autoStartWakeWordChanged();
+    }
+}
+
+void JarvisSettings::setNoiseSuppression(bool enabled)
+{
+    if (m_noiseSuppression != enabled) {
+        m_noiseSuppression = enabled;
+        saveSettings();
+        emit noiseSuppressionChanged();
     }
 }
 

@@ -767,6 +767,12 @@ Item {
             }
 
             CheckBox {
+                Kirigami.FormData.label: i18n("Noise suppression (RNNoise):")
+                checked: JarvisBackend.noiseSuppression
+                onToggled: JarvisBackend.setNoiseSuppression(checked)
+            }
+
+            CheckBox {
                 Kirigami.FormData.label: i18n("Continuous conversation mode:")
                 checked: JarvisBackend.continuousMode
                 onToggled: JarvisBackend.setContinuousMode(checked)

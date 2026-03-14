@@ -229,7 +229,7 @@ void JarvisAudio::processAudioBuffer()
     }
 
     // Denoise before speech detection for cleaner VAD/whisper input
-    const QByteArray cleanAudio = m_rnnoise ? denoiseAudio(bufferCopy) : bufferCopy;
+    const QByteArray cleanAudio = (m_rnnoise && m_settings->noiseSuppressionEnabled()) ? denoiseAudio(bufferCopy) : bufferCopy;
     const auto floatBuf = pcm16ToFloat(cleanAudio);
     if (m_vadCtx) {
         if (!whisper_vad_detect_speech(m_vadCtx, floatBuf.data(), static_cast<int>(floatBuf.size())))
@@ -672,7 +672,7 @@ void JarvisAudio::processVoiceCommand()
     }
 
     // Denoise before transcription
-    const QByteArray cleanData = m_rnnoise ? denoiseAudio(audioData) : audioData;
+    const QByteArray cleanData = (m_rnnoise && m_settings->noiseSuppressionEnabled()) ? denoiseAudio(audioData) : audioData;
 
     [[maybe_unused]] auto f = QtConcurrent::run([this, cleanData]() {
         const QString text = transcribeAudio(cleanData);
