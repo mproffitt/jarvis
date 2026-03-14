@@ -36,10 +36,24 @@ JarvisBackend::JarvisBackend(QObject *parent)
 
     connectModuleSignals();
 
+    // Load persisted continuous mode
+    m_continuousMode = m_settings->continuousMode();
+
     // Health check — every 10s
     connect(m_healthCheckTimer, &QTimer::timeout, this, &JarvisBackend::checkConnection);
     m_healthCheckTimer->start(10000);
     checkConnection();
+
+    // Conversation timeout — end continuous conversation after 30s of inactivity
+    m_conversationTimeout = new QTimer(this);
+    m_conversationTimeout->setSingleShot(true);
+    m_conversationTimeout->setInterval(30000);
+    connect(m_conversationTimeout, &QTimer::timeout, this, [this]() {
+        if (m_conversationActive) {
+            stopConversation();
+            speak(QStringLiteral("Conversation timed out. I'll be here if you need me."));
+        }
+    });
 
     // Reminder check — every 1s
     connect(m_reminderTimer, &QTimer::timeout, this, &JarvisBackend::checkReminders);
@@ -61,11 +75,26 @@ void JarvisBackend::connectModuleSignals()
     connect(m_audio, &JarvisAudio::wakeWordDetected, this, [this]() {
         emit wakeWordDetected();
         setStatus("Wake word detected! Listening, Sir...");
+        if (m_continuousMode) m_conversationActive = true;
     });
     connect(m_audio, &JarvisAudio::voiceCommandTranscribed, this, &JarvisBackend::onVoiceCommandTranscribed);
 
     // TTS → Backend
-    connect(m_tts, &JarvisTts::speakingChanged, this, &JarvisBackend::speakingChanged);
+    connect(m_tts, &JarvisTts::speakingChanged, this, [this]() {
+        emit speakingChanged();
+        // Continuous conversation: re-enter voice command mode after TTS finishes
+        if (!m_tts->isSpeaking() && m_conversationActive
+            && !m_processing && !m_audio->isVoiceCommandMode()) {
+            QTimer::singleShot(300, this, [this]() {
+                // Double-check everything is truly idle before re-entering
+                if (m_conversationActive && !m_processing
+                    && !m_tts->isSpeaking() && !m_audio->isVoiceCommandMode()
+                    && !m_streamReply) {
+                    m_audio->startVoiceCommand();
+                }
+            });
+        }
+    });
 
     // System → Backend
     connect(m_system, &JarvisSystem::systemStatsChanged, this, &JarvisBackend::systemStatsChanged);
@@ -209,6 +238,26 @@ void JarvisBackend::setMaxHistoryPairs(int pairs) { m_settings->setMaxHistoryPai
 void JarvisBackend::setWakeBufferSeconds(int seconds) { m_settings->setWakeBufferSeconds(seconds); }
 void JarvisBackend::setVoiceCmdMaxSeconds(int seconds) { m_settings->setVoiceCmdMaxSeconds(seconds); }
 void JarvisBackend::setAutoStartWakeWord(bool enabled) { m_settings->setAutoStartWakeWord(enabled); }
+
+void JarvisBackend::setContinuousMode(bool enabled)
+{
+    m_settings->setContinuousMode(enabled);
+    m_continuousMode = enabled;
+    emit continuousModeChanged();
+    if (!enabled) stopConversation();
+}
+
+void JarvisBackend::stopConversation()
+{
+    if (m_conversationActive) {
+        m_conversationActive = false;
+        m_emptyTranscriptionCount = 0;
+        if (m_conversationTimeout) m_conversationTimeout->stop();
+        emit conversationActiveChanged();
+        setStatus("Conversation ended.");
+    }
+}
+
 void JarvisBackend::setPersonalityPrompt(const QString &prompt) { m_settings->setPersonalityPrompt(prompt); }
 void JarvisBackend::cancelDownload() { m_settings->cancelDownload(); }
 
@@ -286,11 +335,42 @@ void JarvisBackend::openUrl(const QString &url)
 void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
 {
     if (text.isEmpty()) {
-        setStatus("I couldn't make out what you said, Sir.");
+        if (m_conversationActive) {
+            ++m_emptyTranscriptionCount;
+            if (m_emptyTranscriptionCount >= 2) {
+                stopConversation();
+                return;
+            }
+            // Re-listen silently
+            m_audio->startVoiceCommand();
+        } else {
+            setStatus("I couldn't make out what you said, Sir.");
+        }
         return;
     }
 
+    m_emptyTranscriptionCount = 0;
+
     qDebug() << "[JARVIS] Voice command transcribed:" << text;
+
+    // Check for conversation exit phrases
+    if (m_conversationActive) {
+        static const QStringList exitPhrases = {
+            QStringLiteral("stop"), QStringLiteral("goodbye"), QStringLiteral("that's all"),
+            QStringLiteral("never mind"), QStringLiteral("thank you"), QStringLiteral("thanks"),
+            QStringLiteral("dismiss"), QStringLiteral("bye"),
+        };
+        const QString lower = text.toLower().trimmed();
+        for (const auto &phrase : exitPhrases) {
+            if (lower == phrase || lower == phrase + QStringLiteral(".")) {
+                stopConversation();
+                speak(QStringLiteral("Very well. I'll be here if you need me."));
+                return;
+            }
+        }
+        // Reset conversation timeout
+        if (m_conversationTimeout) m_conversationTimeout->start();
+    }
 
     // Remove wake word from transcription if present
     QString command = text;

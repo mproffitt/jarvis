@@ -65,7 +65,8 @@
       "Bash(git fetch:*)",
       "Bash(git -C /home/martin/ai/jarvis diff upstream/main..main -- src/plugin/audio/micmonitor.h)",
       "Bash(git -C /home/martin/ai/jarvis diff upstream/main..main -- src/plugin/audio/micmonitor.cpp)",
-      "Bash(ls /tmp/jarvis_final_*)"
+      "Bash(ls /tmp/jarvis_final_*)",
+      "Bash(git checkout:*)"
     ]
   }
 }

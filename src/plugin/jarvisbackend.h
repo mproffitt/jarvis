@@ -82,6 +82,10 @@ class JarvisBackend : public QObject
     // Commands
     Q_PROPERTY(QVariantList commandMappings READ commandMappings NOTIFY commandMappingsChanged)
 
+    // Continuous conversation
+    Q_PROPERTY(bool continuousMode READ continuousMode NOTIFY continuousModeChanged)
+    Q_PROPERTY(bool conversationActive READ isConversationActive NOTIFY conversationActiveChanged)
+
 public:
     explicit JarvisBackend(QObject *parent = nullptr);
     ~JarvisBackend() override;
@@ -139,6 +143,10 @@ public:
     [[nodiscard]] bool autoStartWakeWord() const;
     [[nodiscard]] QString personalityPrompt() const;
 
+    // Continuous conversation
+    [[nodiscard]] bool continuousMode() const { return m_continuousMode; }
+    [[nodiscard]] bool isConversationActive() const { return m_conversationActive; }
+
     // Commands (delegated)
     [[nodiscard]] QVariantList commandMappings() const;
 
@@ -178,6 +186,8 @@ public:
     Q_INVOKABLE void setWakeBufferSeconds(int seconds);
     Q_INVOKABLE void setVoiceCmdMaxSeconds(int seconds);
     Q_INVOKABLE void setAutoStartWakeWord(bool enabled);
+    Q_INVOKABLE void setContinuousMode(bool enabled);
+    Q_INVOKABLE void stopConversation();
     Q_INVOKABLE void setPersonalityPrompt(const QString &prompt);
     Q_INVOKABLE void cancelDownload();
     Q_INVOKABLE void openUrl(const QString &url);
@@ -225,6 +235,8 @@ signals:
     void voiceCmdMaxSecondsChanged();
     void autoStartWakeWordChanged();
     void personalityPromptChanged();
+    void continuousModeChanged();
+    void conversationActiveChanged();
     void commandMappingsChanged();
     void availableLlmModelsChanged();
     void cloudModelChoicesChanged();
@@ -327,6 +339,12 @@ private:
     QString m_streamBuffer;
     QString m_fullStreamedResponse;
     QString m_spokenSoFar;
+
+    // Continuous conversation
+    bool m_continuousMode{false};
+    bool m_conversationActive{false};
+    int m_emptyTranscriptionCount{0};
+    QTimer *m_conversationTimeout{nullptr};
 
     // Conversation
     struct ChatMessage {

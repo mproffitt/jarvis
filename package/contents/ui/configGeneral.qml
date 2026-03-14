@@ -487,6 +487,21 @@ Item {
                 onToggled: JarvisBackend.setAutoStartWakeWord(checked)
             }
 
+            CheckBox {
+                Kirigami.FormData.label: i18n("Continuous conversation mode:")
+                checked: JarvisBackend.continuousMode
+                onToggled: JarvisBackend.setContinuousMode(checked)
+            }
+
+            Label {
+                visible: JarvisBackend.continuousMode
+                text: i18n("After the wake word, the mic stays open for back-and-forth conversation. Say \"stop\", \"goodbye\", or \"thank you\" to end.")
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+                color: Kirigami.Theme.disabledTextColor
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+            }
+
             Label {
                 text: i18n("Say \"Jarvis\" to activate voice commands without clicking.")
                 wrapMode: Text.Wrap
