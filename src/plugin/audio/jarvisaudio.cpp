@@ -20,6 +20,7 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
 {
     initAudioCapture();
     initWhisper();
+    initVad();
 
     // Check for wake word every second, even though the buffer holds wakeBufferSeconds of audio
     m_audioProcessTimer->setInterval(1000);
@@ -68,6 +69,10 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
 JarvisAudio::~JarvisAudio()
 {
     stopListening();
+    if (m_vadCtx) {
+        whisper_vad_free(m_vadCtx);
+        m_vadCtx = nullptr;
+    }
     if (m_whisperCtx) {
         whisper_free(m_whisperCtx);
         m_whisperCtx = nullptr;
@@ -218,15 +223,18 @@ void JarvisAudio::processAudioBuffer()
             m_audioBuffer = m_audioBuffer.right(keepSize);
     }
 
-    const auto *samples = reinterpret_cast<const int16_t*>(bufferCopy.constData());
-    const int numSamples = bufferCopy.size() / static_cast<int>(sizeof(int16_t));
-    double sumSquares = 0.0;
-    for (int i = 0; i < numSamples; ++i) {
-        const double s = static_cast<double>(samples[i]);
-        sumSquares += s * s;
+    // Use VAD to check if there's speech, fall back to RMS energy threshold
+    const auto floatBuf = pcm16ToFloat(bufferCopy);
+    if (m_vadCtx) {
+        if (!whisper_vad_detect_speech(m_vadCtx, floatBuf.data(), static_cast<int>(floatBuf.size())))
+            return;
+    } else {
+        // Fallback: RMS energy threshold
+        double sumSquares = 0.0;
+        for (const float s : floatBuf) sumSquares += s * s;
+        const double rms = qSqrt(sumSquares / floatBuf.size()) * 32768.0;
+        if (rms < 1500) return;
     }
-    const double rms = qSqrt(sumSquares / numSamples);
-    if (rms < 1500) return;
 
     m_whisperBusy = true;
     [[maybe_unused]] auto f = QtConcurrent::run([this, bufferCopy]() {
@@ -387,6 +395,47 @@ QString JarvisAudio::findWhisperModel() const
             const QString en = dir + QStringLiteral("ggml-%1.en.bin").arg(size);
             if (QFileInfo::exists(en)) return en;
         }
+    }
+    return {};
+}
+
+void JarvisAudio::initVad()
+{
+    const QString modelPath = findVadModel();
+    if (modelPath.isEmpty()) {
+        qDebug() << "[JARVIS] VAD model not found — using RMS energy fallback.";
+        qDebug() << "[JARVIS] Download silero-vad.onnx from whisper.cpp and place in ~/.local/share/jarvis/";
+        return;
+    }
+
+    qDebug() << "[JARVIS] Loading VAD model from:" << modelPath;
+
+    whisper_vad_context_params params = whisper_vad_default_context_params();
+    params.use_gpu = false;
+    params.n_threads = 1;
+
+    m_vadCtx = whisper_vad_init_from_file_with_params(
+        modelPath.toUtf8().constData(), params);
+
+    if (!m_vadCtx) {
+        qWarning() << "[JARVIS] Failed to initialize VAD from:" << modelPath;
+    } else {
+        qDebug() << "[JARVIS] VAD model loaded successfully (Silero).";
+    }
+}
+
+QString JarvisAudio::findVadModel() const
+{
+    const QStringList searchPaths = {
+        QDir::homePath() + QStringLiteral("/.local/share/jarvis/silero-vad.onnx"),
+        QStringLiteral("/usr/share/jarvis/silero-vad.onnx"),
+        QStringLiteral("/usr/local/share/jarvis/silero-vad.onnx"),
+        QDir::homePath() + QStringLiteral("/.local/share/whisper/silero-vad.onnx"),
+        QStringLiteral("/usr/share/whisper/silero-vad.onnx"),
+    };
+
+    for (const auto &path : searchPaths) {
+        if (QFileInfo::exists(path)) return path;
     }
     return {};
 }

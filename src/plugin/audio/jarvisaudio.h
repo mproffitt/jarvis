@@ -64,6 +64,8 @@ private:
     QString transcribeAudio(const QByteArray &audioData);
     std::vector<float> pcm16ToFloat(const QByteArray &audioData) const;
     QString findWhisperModel() const;
+    QString findVadModel() const;
+    void initVad();
 
     static constexpr int JARVIS_SAMPLE_RATE = 16000;
 
@@ -87,6 +89,7 @@ private:
     static constexpr int MIN_SPEECH_CHUNKS = 3;        // Need 240ms of speech before silence detection
 
     whisper_context *m_whisperCtx{nullptr};
+    struct whisper_vad_context *m_vadCtx{nullptr};
     QMutex m_whisperMutex;
     std::atomic<bool> m_whisperBusy{false};
 
