@@ -297,6 +297,8 @@ private:
     void connectModuleSignals();
     void trySpeakCompleteSentences();
     void finalizeStreamingResponse();
+    void saveChatHistory();
+    void loadChatHistory();
 
     static constexpr auto JARVIS_SYSTEM_PROMPT =
         "You are a friendly, helpful AI voice assistant running on a Linux desktop.\n"

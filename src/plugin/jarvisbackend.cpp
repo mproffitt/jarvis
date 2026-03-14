@@ -59,6 +59,7 @@ JarvisBackend::JarvisBackend(QObject *parent)
     connect(m_reminderTimer, &QTimer::timeout, this, &JarvisBackend::checkReminders);
     m_reminderTimer->start(1000);
 
+    loadChatHistory();
     setStatus("Online. All systems operational.");
 }
 
@@ -1012,6 +1013,7 @@ void JarvisBackend::clearHistory()
     m_lastResponse.clear();
     emit chatHistoryChanged();
     emit lastResponseChanged();
+    saveChatHistory();
     setStatus("Memory cleared. Fresh start.");
 }
 
@@ -1033,6 +1035,44 @@ void JarvisBackend::addToChatHistory(const QString &role, const QString &message
     }
 
     emit chatHistoryChanged();
+    saveChatHistory();
+}
+
+void JarvisBackend::saveChatHistory()
+{
+    const QString path = m_settings->jarvisDataDir() + QStringLiteral("/chat_history.json");
+    QJsonArray historyArray;
+    for (const auto &[role, content] : m_conversationHistory) {
+        historyArray.append(QJsonObject{
+            {QStringLiteral("role"), role},
+            {QStringLiteral("content"), content},
+        });
+    }
+    QFile file(path);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        file.write(QJsonDocument(historyArray).toJson(QJsonDocument::Compact));
+    }
+}
+
+void JarvisBackend::loadChatHistory()
+{
+    const QString path = m_settings->jarvisDataDir() + QStringLiteral("/chat_history.json");
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return;
+
+    const auto doc = QJsonDocument::fromJson(file.readAll());
+    if (!doc.isArray()) return;
+
+    const auto arr = doc.array();
+    for (const auto &val : arr) {
+        const auto obj = val.toObject();
+        const QString role = obj[QStringLiteral("role")].toString();
+        const QString content = obj[QStringLiteral("content")].toString();
+        if (role.isEmpty() || content.isEmpty()) continue;
+        m_conversationHistory.push_back({role, content});
+        m_chatHistory.append(QStringLiteral("%1|%2").arg(role, content));
+    }
+    if (!m_chatHistory.isEmpty()) emit chatHistoryChanged();
 }
 
 // ─────────────────────────────────────────────
