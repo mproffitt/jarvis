@@ -15,6 +15,7 @@ depends=(
     'libplasma'
     'ki18n'
     'kconfig'
+    'kwallet'
     'whisper.cpp'
     'pipewire'
 )

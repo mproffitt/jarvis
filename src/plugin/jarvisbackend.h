@@ -64,6 +64,8 @@ class JarvisBackend : public QObject
     // Settings properties (delegated to JarvisSettings, exposed for config QML)
     Q_PROPERTY(QString llmProvider READ llmProvider NOTIFY llmProviderChanged)
     Q_PROPERTY(QString llmServerUrl READ llmServerUrl NOTIFY llmServerUrlChanged)
+    Q_PROPERTY(QString openaiApiKey READ openaiApiKey NOTIFY openaiApiKeyChanged)
+    Q_PROPERTY(QString geminiApiKey READ geminiApiKey NOTIFY geminiApiKeyChanged)
     Q_PROPERTY(QString llmModelId READ llmModelId NOTIFY llmModelIdChanged)
     Q_PROPERTY(QString currentModelName READ currentModelName NOTIFY currentModelNameChanged)
     Q_PROPERTY(QString currentVoiceName READ currentVoiceName NOTIFY currentVoiceNameChanged)
@@ -86,6 +88,9 @@ class JarvisBackend : public QObject
     // Continuous conversation
     Q_PROPERTY(bool continuousMode READ continuousMode NOTIFY continuousModeChanged)
     Q_PROPERTY(bool conversationActive READ isConversationActive NOTIFY conversationActiveChanged)
+
+    // OAuth login status
+    Q_PROPERTY(bool oauthLoggedIn READ isOAuthLoggedIn NOTIFY oauthStatusChanged)
 
 public:
     explicit JarvisBackend(QObject *parent = nullptr);
@@ -129,6 +134,8 @@ public:
     // Settings (delegated)
     [[nodiscard]] QString llmProvider() const;
     [[nodiscard]] QString llmServerUrl() const;
+    [[nodiscard]] QString openaiApiKey() const;
+    [[nodiscard]] QString geminiApiKey() const;
     [[nodiscard]] QString llmModelId() const;
     [[nodiscard]] QString currentModelName() const;
     [[nodiscard]] QString currentVoiceName() const;
@@ -148,6 +155,9 @@ public:
     // Continuous conversation
     [[nodiscard]] bool continuousMode() const { return m_continuousMode; }
     [[nodiscard]] bool isConversationActive() const { return m_conversationActive; }
+
+    // OAuth (delegated)
+    [[nodiscard]] bool isOAuthLoggedIn();
 
     // Commands (delegated)
     [[nodiscard]] QVariantList commandMappings() const;
@@ -177,6 +187,8 @@ public:
     // Settings invokables
     Q_INVOKABLE void setLlmProvider(const QString &provider);
     Q_INVOKABLE void setLlmServerUrl(const QString &url);
+    Q_INVOKABLE void setOpenaiApiKey(const QString &key);
+    Q_INVOKABLE void setGeminiApiKey(const QString &key);
     Q_INVOKABLE void setLlmModelId(const QString &modelId);
     Q_INVOKABLE void refreshOllamaModels();
     Q_INVOKABLE void refreshCloudModels();
@@ -197,6 +209,11 @@ public:
     Q_INVOKABLE void testVoice(const QString &voiceId);
     Q_INVOKABLE void fetchMoreModels();
     Q_INVOKABLE void fetchMoreVoices();
+
+    // OAuth invokables
+    Q_INVOKABLE void oauthLogin(const QString &provider);
+    Q_INVOKABLE void oauthLogout(const QString &provider);
+    Q_INVOKABLE void cancelOAuthLogin();
 
     // Commands invokables
     Q_INVOKABLE void addCommand(const QString &phrase, const QString &action, const QString &type);
@@ -227,6 +244,8 @@ signals:
     void ttsMutedChanged();
     void llmProviderChanged();
     void llmServerUrlChanged();
+    void openaiApiKeyChanged();
+    void geminiApiKeyChanged();
     void llmModelIdChanged();
     void currentModelNameChanged();
     void currentVoiceNameChanged();
@@ -241,6 +260,7 @@ signals:
     void personalityPromptChanged();
     void continuousModeChanged();
     void conversationActiveChanged();
+    void oauthStatusChanged();
     void commandMappingsChanged();
     void availableLlmModelsChanged();
     void cloudModelChoicesChanged();
@@ -343,6 +363,7 @@ private:
     QString m_streamBuffer;
     QString m_fullStreamedResponse;
     QString m_spokenSoFar;
+    QString m_pendingOAuthMessage;
 
     // Continuous conversation
     bool m_continuousMode{false};

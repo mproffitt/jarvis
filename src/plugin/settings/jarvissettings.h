@@ -8,6 +8,9 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 
+class JarvisOAuth;
+namespace KWallet { class Wallet; }
+
 class JarvisSettings : public QObject
 {
     Q_OBJECT
@@ -18,6 +21,22 @@ public:
     // Getters
     [[nodiscard]] QString llmServerUrl() const { return m_llmServerUrl; }
     [[nodiscard]] QString llmProvider() const { return m_llmProvider; }
+    [[nodiscard]] QString openaiApiKey() const { return m_openaiApiKey; }
+    [[nodiscard]] QString geminiApiKey() const { return m_geminiApiKey; }
+    [[nodiscard]] QString claudeApiKey() const { return m_claudeApiKey; }
+    [[nodiscard]] QString activeApiKey();
+    [[nodiscard]] bool hasOAuthCredentials() const;
+    [[nodiscard]] bool isOAuthLoggedIn();
+    void ensureOAuthToken();
+    void oauthLogin(const QString &provider);
+    void oauthLogout(const QString &provider);
+    void cancelOAuthLogin();
+    void completeClaudeLogin(const QString &code);
+    [[nodiscard]] bool awaitingClaudeCode() const;
+    [[nodiscard]] bool isClaudeProvider() const { return m_llmProvider == QStringLiteral("claude"); }
+    [[nodiscard]] bool isGeminiOAuthMode() const;
+    [[nodiscard]] QString geminiCloudCodeUrl() const;
+    [[nodiscard]] QString geminiProjectId() const;
     [[nodiscard]] QString llmModelId() const { return m_llmModelId; }
     [[nodiscard]] QString currentModelName() const { return m_currentModelName; }
     [[nodiscard]] QString currentVoiceName() const { return m_currentVoiceName; }
@@ -41,6 +60,9 @@ public:
     // Setters
     void setLlmServerUrl(const QString &url);
     void setLlmProvider(const QString &provider);
+    void setOpenaiApiKey(const QString &key);
+    void setGeminiApiKey(const QString &key);
+    void setClaudeApiKey(const QString &key);
     void setLlmModelId(const QString &modelId);
     void setCurrentModelName(const QString &name);
     void setMaxHistoryPairs(int pairs);
@@ -81,6 +103,9 @@ public:
 signals:
     void llmServerUrlChanged();
     void llmProviderChanged();
+    void openaiApiKeyChanged();
+    void geminiApiKeyChanged();
+    void claudeApiKeyChanged();
     void llmModelIdChanged();
     void currentModelNameChanged();
     void currentVoiceNameChanged();
@@ -100,16 +125,31 @@ signals:
     void ttsMutedChanged();
     void voiceActivated(const QString &voiceId, const QString &onnxPath);
     void cloudModelChoicesChanged();
+    void oauthTokenReady();
+    void oauthTokenError(const QString &error);
+    void oauthLoginStarted(const QString &provider);
+    void oauthLoginFinished(const QString &provider, bool success);
+    void oauthStatusChanged();
 
 private:
     void loadSettings();
     void saveSettings();
+    void openWallet();
+    void onWalletOpened(bool success);
+    void writeKeyToWallet(const QString &entry, const QString &key);
+
+    static inline const QString WALLET_FOLDER = QStringLiteral("jarvis-plasmoid");
 
     QSettings m_settings{QStringLiteral("jarvis-plasmoid"), QStringLiteral("jarvis")};
     QNetworkAccessManager *m_networkManager{nullptr};
+    KWallet::Wallet *m_wallet{nullptr};
+    JarvisOAuth *m_oauth{nullptr};
 
     QString m_llmProvider{QStringLiteral("llamacpp")};
     QString m_llmServerUrl{QStringLiteral("http://127.0.0.1:8080")};
+    QString m_openaiApiKey;
+    QString m_geminiApiKey;
+    QString m_claudeApiKey;
     QString m_llmModelId;
     QString m_currentModelName;
     QString m_currentVoiceName;

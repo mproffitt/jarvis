@@ -2,6 +2,7 @@ set(jarvis_plugin_SRCS
     jarvisplugin.cpp
     jarvisbackend.cpp
     settings/jarvissettings.cpp
+    settings/jarvisoauth.cpp
     tts/jarvisTts.cpp
     audio/jarvisaudio.cpp
     audio/micmonitor.cpp
@@ -26,6 +27,7 @@ target_link_libraries(jarvis_plugin
     Qt6::Concurrent
     Plasma::Plasma
     KF6::I18n
+    KF6::Wallet
     ${WHISPER_LIBRARIES}
     ${PIPEWIRE_LIBRARIES}
 )

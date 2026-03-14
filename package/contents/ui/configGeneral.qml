@@ -65,7 +65,8 @@ Item {
                 Kirigami.FormData.label: i18n("Provider:")
                 model: [
                     { value: "llamacpp", text: "llama.cpp (local)" },
-                    { value: "ollama",   text: "Ollama (local)" }
+                    { value: "ollama",   text: "Ollama (local)" },
+                    { value: "gemini",   text: "Google Gemini" }
                 ]
                 textRole: "text"
                 valueRole: "value"
@@ -88,6 +89,7 @@ Item {
                     placeholderText: {
                         var p = JarvisBackend.llmProvider
                         if (p === "ollama") return "http://127.0.0.1:11434"
+                        if (p === "gemini") return "https://generativelanguage.googleapis.com/v1beta/openai"
                         return "http://127.0.0.1:8080"
                     }
                     Layout.fillWidth: true
@@ -97,6 +99,76 @@ Item {
                     text: i18n("Apply")
                     icon.name: "dialog-ok-apply"
                     onClicked: JarvisBackend.setLlmServerUrl(serverUrlField.text)
+                }
+            }
+
+            // OpenAI API Key
+            RowLayout {
+                Kirigami.FormData.label: i18n("OpenAI API Key:")
+                visible: JarvisBackend.llmProvider === "openai"
+                spacing: Kirigami.Units.smallSpacing
+                TextField {
+                    id: openaiKeyField
+                    text: JarvisBackend.openaiApiKey
+                    placeholderText: i18n("sk-...")
+                    echoMode: TextInput.Password
+                    Layout.fillWidth: true
+                    onAccepted: JarvisBackend.setOpenaiApiKey(text)
+                }
+                Button {
+                    text: i18n("Save")
+                    icon.name: "dialog-ok-apply"
+                    onClicked: JarvisBackend.setOpenaiApiKey(openaiKeyField.text)
+                }
+            }
+
+            // Gemini API Key
+            RowLayout {
+                Kirigami.FormData.label: i18n("Gemini API Key:")
+                visible: JarvisBackend.llmProvider === "gemini"
+                spacing: Kirigami.Units.smallSpacing
+                TextField {
+                    id: geminiKeyField
+                    text: JarvisBackend.geminiApiKey
+                    placeholderText: i18n("AIza... (optional if logged in)")
+                    echoMode: TextInput.Password
+                    Layout.fillWidth: true
+                    onAccepted: JarvisBackend.setGeminiApiKey(text)
+                }
+                Button {
+                    text: i18n("Save")
+                    icon.name: "dialog-ok-apply"
+                    onClicked: JarvisBackend.setGeminiApiKey(geminiKeyField.text)
+                }
+            }
+
+            // Gemini OAuth login
+            RowLayout {
+                Kirigami.FormData.label: i18n("Google Account:")
+                visible: JarvisBackend.llmProvider === "gemini"
+                spacing: Kirigami.Units.smallSpacing
+                Kirigami.Icon {
+                    visible: JarvisBackend.oauthLoggedIn
+                    source: "emblem-default"
+                    implicitWidth: Kirigami.Units.iconSizes.small
+                    implicitHeight: Kirigami.Units.iconSizes.small
+                }
+                Label {
+                    visible: JarvisBackend.oauthLoggedIn
+                    text: i18n("Logged in")
+                    color: Kirigami.Theme.positiveTextColor
+                }
+                Button {
+                    text: JarvisBackend.oauthLoggedIn ? i18n("Re-login") : i18n("Login with Google")
+                    icon.name: "go-next"
+                    onClicked: JarvisBackend.oauthLogin("gemini")
+                }
+                Button {
+                    text: i18n("Logout")
+                    icon.name: "system-log-out"
+                    visible: JarvisBackend.oauthLoggedIn
+                    flat: true
+                    onClicked: JarvisBackend.oauthLogout("gemini")
                 }
             }
 
@@ -198,8 +270,26 @@ Item {
             }
 
             Label {
-                visible: JarvisBackend.llmProvider === "openai" || JarvisBackend.llmProvider === "gemini" || JarvisBackend.llmProvider === "claude"
-                text: i18n("Cloud provider selected. API key configuration coming in a future update.")
+                visible: JarvisBackend.llmProvider === "openai"
+                text: i18n("API key stored in KDE Wallet. Falls back to OPENAI_API_KEY environment variable.")
+                color: Kirigami.Theme.disabledTextColor
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+
+            Label {
+                visible: JarvisBackend.llmProvider === "gemini"
+                text: i18n("Login with your Google account to use your Gemini subscription, or enter an API key. Tokens refresh automatically. Falls back to GEMINI_API_KEY env var.")
+                color: Kirigami.Theme.disabledTextColor
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+
+            Label {
+                visible: JarvisBackend.llmProvider === "claude"
+                text: i18n("Claude API key support coming in a future update. Falls back to ANTHROPIC_API_KEY env var.")
                 color: Kirigami.Theme.disabledTextColor
                 font.pointSize: Kirigami.Theme.smallFont.pointSize
                 wrapMode: Text.Wrap

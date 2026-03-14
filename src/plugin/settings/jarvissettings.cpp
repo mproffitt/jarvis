@@ -1,4 +1,5 @@
 #include "jarvissettings.h"
+#include "jarvisoauth.h"
 
 #include <QDir>
 #include <QFile>
@@ -7,12 +8,40 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkRequest>
+#include <QProcessEnvironment>
+#include <KWallet/KWallet>
 
 JarvisSettings::JarvisSettings(QNetworkAccessManager *nam, QObject *parent)
     : QObject(parent)
     , m_networkManager(nam)
+    , m_oauth(new JarvisOAuth(nam, this))
 {
     loadSettings();
+    openWallet();
+
+    // Forward OAuth signals
+    connect(m_oauth, &JarvisOAuth::tokenRefreshed, this, [this](const QString &provider) {
+        if (provider == m_llmProvider) {
+            qDebug() << "[JARVIS] OAuth token refreshed for" << provider;
+            emit oauthTokenReady();
+        }
+    });
+    connect(m_oauth, &JarvisOAuth::tokenError, this, [this](const QString &provider, const QString &error) {
+        if (provider == m_llmProvider) {
+            qWarning() << "[JARVIS] OAuth token error for" << provider << ":" << error;
+            emit oauthTokenError(error);
+        }
+    });
+    connect(m_oauth, &JarvisOAuth::loginStarted, this, [this](const QString &provider) {
+        emit oauthLoginStarted(provider);
+        emit oauthStatusChanged();
+    });
+    connect(m_oauth, &JarvisOAuth::loginFinished, this, [this](const QString &provider, bool success) {
+        emit oauthLoginFinished(provider, success);
+        emit oauthStatusChanged();
+        if (success) fetchCloudModels();
+    });
+    connect(m_oauth, &JarvisOAuth::loginStatusChanged, this, &JarvisSettings::oauthStatusChanged);
 
     if (m_llmProvider == QStringLiteral("ollama")) {
         fetchOllamaModels();
@@ -36,6 +65,76 @@ QString JarvisSettings::jarvisDataDir() const
 }
 
 // ─────────────────────────────────────────────
+// KWallet
+// ─────────────────────────────────────────────
+
+void JarvisSettings::openWallet()
+{
+    m_wallet = KWallet::Wallet::openWallet(
+        KWallet::Wallet::LocalWallet(), 0, KWallet::Wallet::Asynchronous);
+    if (m_wallet) {
+        connect(m_wallet, &KWallet::Wallet::walletOpened,
+                this, &JarvisSettings::onWalletOpened);
+    } else {
+        qWarning() << "[JARVIS] KWallet unavailable — API keys will not be persisted";
+    }
+}
+
+void JarvisSettings::onWalletOpened(bool success)
+{
+    if (!success || !m_wallet) {
+        qWarning() << "[JARVIS] Failed to open KWallet — API keys will not be persisted";
+        return;
+    }
+
+    if (!m_wallet->hasFolder(WALLET_FOLDER)) {
+        m_wallet->createFolder(WALLET_FOLDER);
+    }
+    m_wallet->setFolder(WALLET_FOLDER);
+
+    // Read stored keys
+    QString key;
+    if (m_wallet->readPassword(QStringLiteral("openai-api-key"), key) == 0 && !key.isEmpty()) {
+        m_openaiApiKey = key;
+        emit openaiApiKeyChanged();
+    }
+    if (m_wallet->readPassword(QStringLiteral("gemini-api-key"), key) == 0 && !key.isEmpty()) {
+        m_geminiApiKey = key;
+        emit geminiApiKeyChanged();
+    }
+    if (m_wallet->readPassword(QStringLiteral("claude-api-key"), key) == 0 && !key.isEmpty()) {
+        m_claudeApiKey = key;
+        emit claudeApiKeyChanged();
+    }
+
+    // Migrate any legacy key that was loaded from QSettings
+    if (!m_openaiApiKey.isEmpty() && m_wallet->readPassword(QStringLiteral("openai-api-key"), key) == 0 && key.isEmpty()) {
+        writeKeyToWallet(QStringLiteral("openai-api-key"), m_openaiApiKey);
+    }
+
+    qDebug() << "[JARVIS] KWallet opened — API keys loaded";
+}
+
+void JarvisSettings::writeKeyToWallet(const QString &entry, const QString &key)
+{
+    if (!m_wallet || !m_wallet->isOpen()) {
+        qWarning() << "[JARVIS] KWallet not open — cannot save API key";
+        return;
+    }
+
+    if (!m_wallet->hasFolder(WALLET_FOLDER)) {
+        m_wallet->createFolder(WALLET_FOLDER);
+    }
+    m_wallet->setFolder(WALLET_FOLDER);
+
+    if (key.isEmpty()) {
+        m_wallet->removeEntry(entry);
+    } else {
+        m_wallet->writePassword(entry, key);
+    }
+}
+
+// ─────────────────────────────────────────────
 // Persistence
 // ─────────────────────────────────────────────
 
@@ -46,6 +145,13 @@ void JarvisSettings::loadSettings()
     m_llmServerUrl = m_settings.value(QStringLiteral("llm/serverUrl"),
                                        defaultUrlForProvider(m_llmProvider)).toString();
     m_llmModelId = m_settings.value(QStringLiteral("llm/modelId")).toString();
+    // Migrate any plaintext API key from old config into memory (will be moved to KWallet on first save)
+    const QString legacyKey = m_settings.value(QStringLiteral("llm/apiKey")).toString();
+    if (!legacyKey.isEmpty()) {
+        m_openaiApiKey = legacyKey; // assume it was for the active provider
+        m_settings.remove(QStringLiteral("llm/apiKey"));
+        m_settings.sync();
+    }
     m_currentModelName = m_settings.value(QStringLiteral("llm/modelName"),
                                            QStringLiteral("Qwen2.5-Coder-1.5B-Instruct")).toString();
     m_currentVoiceName = m_settings.value(QStringLiteral("tts/voiceName"),
@@ -134,6 +240,116 @@ void JarvisSettings::setLlmProvider(const QString &provider)
             fetchCloudModels();
         }
     }
+}
+
+void JarvisSettings::setOpenaiApiKey(const QString &key)
+{
+    if (m_openaiApiKey != key) {
+        m_openaiApiKey = key;
+        writeKeyToWallet(QStringLiteral("openai-api-key"), key);
+        emit openaiApiKeyChanged();
+    }
+}
+
+void JarvisSettings::setGeminiApiKey(const QString &key)
+{
+    if (m_geminiApiKey != key) {
+        m_geminiApiKey = key;
+        writeKeyToWallet(QStringLiteral("gemini-api-key"), key);
+        emit geminiApiKeyChanged();
+    }
+}
+
+void JarvisSettings::setClaudeApiKey(const QString &key)
+{
+    if (m_claudeApiKey != key) {
+        m_claudeApiKey = key;
+        writeKeyToWallet(QStringLiteral("claude-api-key"), key);
+        emit claudeApiKeyChanged();
+    }
+}
+
+QString JarvisSettings::activeApiKey()
+{
+    const auto env = QProcessEnvironment::systemEnvironment();
+
+    if (m_llmProvider == QStringLiteral("openai")) {
+        if (!m_openaiApiKey.isEmpty()) return m_openaiApiKey;
+        return env.value(QStringLiteral("OPENAI_API_KEY"));
+    }
+    if (m_llmProvider == QStringLiteral("gemini")) {
+        if (!m_geminiApiKey.isEmpty()) return m_geminiApiKey;
+        // Try CLI OAuth token
+        const QString oauthToken = m_oauth->accessToken(QStringLiteral("gemini"));
+        if (!oauthToken.isEmpty()) return oauthToken;
+        return env.value(QStringLiteral("GEMINI_API_KEY"));
+    }
+    if (m_llmProvider == QStringLiteral("claude")) {
+        if (!m_claudeApiKey.isEmpty()) return m_claudeApiKey;
+        // Try CLI OAuth token
+        const QString oauthToken = m_oauth->accessToken(QStringLiteral("claude"));
+        if (!oauthToken.isEmpty()) return oauthToken;
+        return env.value(QStringLiteral("ANTHROPIC_API_KEY"));
+    }
+    return {};
+}
+
+bool JarvisSettings::hasOAuthCredentials() const
+{
+    return m_oauth->hasCredentials(m_llmProvider);
+}
+
+void JarvisSettings::ensureOAuthToken()
+{
+    m_oauth->ensureValidToken(m_llmProvider);
+}
+
+bool JarvisSettings::isOAuthLoggedIn()
+{
+    return m_oauth->hasValidToken(m_llmProvider) || m_oauth->hasCredentials(m_llmProvider);
+}
+
+void JarvisSettings::oauthLogin(const QString &provider)
+{
+    m_oauth->startLogin(provider);
+}
+
+void JarvisSettings::oauthLogout(const QString &provider)
+{
+    m_oauth->logout(provider);
+}
+
+void JarvisSettings::cancelOAuthLogin()
+{
+    m_oauth->cancelLogin();
+}
+
+void JarvisSettings::completeClaudeLogin(const QString &code)
+{
+    m_oauth->completeClaudeLogin(code);
+}
+
+bool JarvisSettings::awaitingClaudeCode() const
+{
+    return m_oauth->awaitingClaudeCode();
+}
+
+bool JarvisSettings::isGeminiOAuthMode() const
+{
+    // We're in Gemini OAuth mode when: provider is gemini, no API key set, and OAuth creds exist
+    return m_llmProvider == QStringLiteral("gemini")
+        && m_geminiApiKey.isEmpty()
+        && m_oauth->isGeminiOAuthMode();
+}
+
+QString JarvisSettings::geminiCloudCodeUrl() const
+{
+    return QStringLiteral("https://cloudcode-pa.googleapis.com/v1internal");
+}
+
+QString JarvisSettings::geminiProjectId() const
+{
+    return m_oauth->geminiProjectId();
 }
 
 void JarvisSettings::setLlmModelId(const QString &modelId)
@@ -314,15 +530,8 @@ void JarvisSettings::fetchCloudModels()
     if (m_llmProvider == QStringLiteral("llamacpp") || m_llmProvider == QStringLiteral("ollama"))
         return;
 
-    // Cloud model choices — hardcoded defaults for now (API key fields come in a later commit)
-    if (m_llmProvider == QStringLiteral("openai")) {
-        m_cloudModelChoices = {
-            QVariantMap{{QStringLiteral("id"), QStringLiteral("gpt-4o")},
-                        {QStringLiteral("name"), QStringLiteral("GPT-4o")}},
-            QVariantMap{{QStringLiteral("id"), QStringLiteral("gpt-4o-mini")},
-                        {QStringLiteral("name"), QStringLiteral("GPT-4o Mini")}},
-        };
-    } else if (m_llmProvider == QStringLiteral("gemini")) {
+    if (m_llmProvider == QStringLiteral("gemini")) {
+        // Gemini Cloud Code doesn't have a models list endpoint — use hardcoded
         m_cloudModelChoices = {
             QVariantMap{{QStringLiteral("id"), QStringLiteral("gemini-2.5-flash")},
                         {QStringLiteral("name"), QStringLiteral("Gemini 2.5 Flash")}},
@@ -330,6 +539,18 @@ void JarvisSettings::fetchCloudModels()
                         {QStringLiteral("name"), QStringLiteral("Gemini 2.5 Pro")}},
             QVariantMap{{QStringLiteral("id"), QStringLiteral("gemini-2.0-flash")},
                         {QStringLiteral("name"), QStringLiteral("Gemini 2.0 Flash")}},
+        };
+        emit cloudModelChoicesChanged();
+        return;
+    }
+
+    // Cloud model choices — hardcoded defaults for now
+    if (m_llmProvider == QStringLiteral("openai")) {
+        m_cloudModelChoices = {
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("gpt-4o")},
+                        {QStringLiteral("name"), QStringLiteral("GPT-4o")}},
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("gpt-4o-mini")},
+                        {QStringLiteral("name"), QStringLiteral("GPT-4o Mini")}},
         };
     } else if (m_llmProvider == QStringLiteral("claude")) {
         m_cloudModelChoices = {

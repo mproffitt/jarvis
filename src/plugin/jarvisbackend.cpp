@@ -110,6 +110,7 @@ void JarvisBackend::connectModuleSignals()
             m_processing = false;
             emit processingChanged();
         }
+        m_pendingOAuthMessage.clear();
         emit llmProviderChanged();
         checkConnection();
     });
@@ -117,6 +118,8 @@ void JarvisBackend::connectModuleSignals()
         emit llmServerUrlChanged();
         checkConnection();
     });
+    connect(m_settings, &JarvisSettings::openaiApiKeyChanged, this, &JarvisBackend::openaiApiKeyChanged);
+    connect(m_settings, &JarvisSettings::geminiApiKeyChanged, this, &JarvisBackend::geminiApiKeyChanged);
     connect(m_settings, &JarvisSettings::llmModelIdChanged, this, &JarvisBackend::llmModelIdChanged);
     connect(m_settings, &JarvisSettings::currentModelNameChanged, this, [this]() {
         emit currentModelNameChanged();
@@ -146,7 +149,27 @@ void JarvisBackend::connectModuleSignals()
     connect(m_settings, &JarvisSettings::ttsVolumeChanged, this, [this]() { m_tts->onTtsVolumeChanged(); });
     connect(m_settings, &JarvisSettings::ttsMutedChanged, this, &JarvisBackend::ttsMutedChanged);
     connect(m_settings, &JarvisSettings::voiceActivated, m_tts, &JarvisTts::onVoiceActivated);
+    connect(m_settings, &JarvisSettings::oauthStatusChanged, this, &JarvisBackend::oauthStatusChanged);
     connect(m_settings, &JarvisSettings::cloudModelChoicesChanged, this, &JarvisBackend::cloudModelChoicesChanged);
+
+    // OAuth token refresh → retry pending message
+    connect(m_settings, &JarvisSettings::oauthTokenReady, this, [this]() {
+        if (!m_pendingOAuthMessage.isEmpty()) {
+            const QString msg = m_pendingOAuthMessage;
+            m_pendingOAuthMessage.clear();
+            qDebug() << "[JARVIS] OAuth token ready, retrying pending message";
+            sendToLlm(msg);
+        }
+    });
+    connect(m_settings, &JarvisSettings::oauthTokenError, this, [this](const QString &error) {
+        if (!m_pendingOAuthMessage.isEmpty()) {
+            m_pendingOAuthMessage.clear();
+            m_processing = false;
+            emit processingChanged();
+            setStatus(QStringLiteral("OAuth error: ") + error);
+            emit errorOccurred(QStringLiteral("OAuth authentication failed: ") + error);
+        }
+    });
 
     // Commands → Backend
     connect(m_commands, &JarvisCommands::commandMappingsChanged, this, &JarvisBackend::commandMappingsChanged);
@@ -186,6 +209,8 @@ QString JarvisBackend::greeting() const { return m_system->greeting(); }
 
 QString JarvisBackend::llmProvider() const { return m_settings->llmProvider(); }
 QString JarvisBackend::llmServerUrl() const { return m_settings->llmServerUrl(); }
+QString JarvisBackend::openaiApiKey() const { return m_settings->openaiApiKey(); }
+QString JarvisBackend::geminiApiKey() const { return m_settings->geminiApiKey(); }
 QString JarvisBackend::llmModelId() const { return m_settings->llmModelId(); }
 QString JarvisBackend::currentModelName() const { return m_settings->currentModelName(); }
 QString JarvisBackend::currentVoiceName() const { return m_settings->currentVoiceName(); }
@@ -220,6 +245,8 @@ void JarvisBackend::setTtsPitch(double pitch) { m_settings->setTtsPitch(pitch); 
 void JarvisBackend::setTtsVolume(double volume) { m_settings->setTtsVolume(volume); }
 void JarvisBackend::setLlmProvider(const QString &provider) { m_settings->setLlmProvider(provider); }
 void JarvisBackend::setLlmServerUrl(const QString &url) { m_settings->setLlmServerUrl(url); }
+void JarvisBackend::setOpenaiApiKey(const QString &key) { m_settings->setOpenaiApiKey(key); }
+void JarvisBackend::setGeminiApiKey(const QString &key) { m_settings->setGeminiApiKey(key); }
 void JarvisBackend::setLlmModelId(const QString &modelId) { m_settings->setLlmModelId(modelId); }
 void JarvisBackend::refreshOllamaModels()
 {
@@ -320,6 +347,12 @@ void JarvisBackend::fetchMoreVoices()
     m_settings->fetchMoreVoices();
     emit availableTtsVoicesChanged();
 }
+
+// OAuth delegated methods
+bool JarvisBackend::isOAuthLoggedIn() { return m_settings->isOAuthLoggedIn(); }
+void JarvisBackend::oauthLogin(const QString &provider) { m_settings->oauthLogin(provider); }
+void JarvisBackend::oauthLogout(const QString &provider) { m_settings->oauthLogout(provider); }
+void JarvisBackend::cancelOAuthLogin() { m_settings->cancelOAuthLogin(); }
 
 void JarvisBackend::addCommand(const QString &phrase, const QString &action, const QString &type) { m_commands->addCommand(phrase, action, type); }
 void JarvisBackend::removeCommand(int index) { m_commands->removeCommand(index); }
@@ -424,51 +457,120 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
         m_conversationHistory.erase(m_conversationHistory.begin());
     }
 
-    QJsonArray messages = buildConversationContext();
-
-    QJsonObject requestBody;
-    requestBody[QStringLiteral("messages")] = messages;
-    requestBody[QStringLiteral("temperature")] = 0.7;
-    requestBody[QStringLiteral("max_tokens")] = 2048;
-    requestBody[QStringLiteral("stream")] = true;
-
-    // Add model to request body for non-llamacpp providers
-    if (m_settings->providerNeedsModelInRequest()) {
-        QString modelId = m_settings->llmModelId();
-        if (modelId.isEmpty()) {
-            m_processing = false;
-            emit processingChanged();
-            setStatus("No model selected. Please choose a model in settings.");
-            emit errorOccurred("No model selected.");
-            if (!m_conversationHistory.empty()) m_conversationHistory.pop_back();
-            return;
-        }
-        requestBody[QStringLiteral("model")] = modelId;
-    }
-
-    const QUrl url(m_settings->chatCompletionsUrl());
-    QNetworkRequest request(url);
-    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-    request.setTransferTimeout(120000);
-
-    // Cloud providers need API key — for now just check and warn
-    if (m_settings->providerNeedsApiKey()) {
-        m_processing = false;
-        emit processingChanged();
-        setStatus("No API key configured for this provider, Sir. API key support coming soon.");
-        emit errorOccurred("No API key configured. Cloud provider support requires API keys (coming in a future update).");
-        if (!m_conversationHistory.empty()) {
-            m_conversationHistory.pop_back();
-        }
-        return;
-    }
-
     // Reset streaming state
     m_streamBuffer.clear();
     m_fullStreamedResponse.clear();
     m_spokenSoFar.clear();
     m_streamingResponse.clear();
     emit streamingResponseChanged();
+
+    // Build request based on provider
+    QJsonObject requestBody;
+    QUrl url;
+    QNetworkRequest request;
+
+    if (m_settings->isGeminiOAuthMode()) {
+        // Gemini Cloud Code Assist API — different endpoint, format, and auth
+        const QString apiKey = m_settings->activeApiKey();
+        if (apiKey.isEmpty()) {
+            if (m_settings->hasOAuthCredentials()) {
+                m_pendingOAuthMessage = userMessage;
+                setStatus("Refreshing authentication token, Sir...");
+                m_settings->ensureOAuthToken();
+                return;
+            }
+            m_processing = false;
+            emit processingChanged();
+            setStatus("No credentials. Please log in with Google, Sir.");
+            emit errorOccurred("No Gemini credentials. Please log in.");
+            return;
+        }
+
+        // Build Cloud Code request format
+        QJsonArray contents;
+        // System instruction
+        const QString sysPrompt = buildSystemPrompt();
+        QJsonObject systemInstruction{
+            {QStringLiteral("role"), QStringLiteral("user")},
+            {QStringLiteral("parts"), QJsonArray{QJsonObject{{QStringLiteral("text"), sysPrompt}}}},
+        };
+        // Conversation contents
+        for (const auto &msg : m_conversationHistory) {
+            const QString role = (msg.role == QStringLiteral("assistant")) ? QStringLiteral("model") : QStringLiteral("user");
+            contents.append(QJsonObject{
+                {QStringLiteral("role"), role},
+                {QStringLiteral("parts"), QJsonArray{QJsonObject{{QStringLiteral("text"), msg.content}}}},
+            });
+        }
+
+        const QString modelId = m_settings->llmModelId().isEmpty()
+            ? QStringLiteral("gemini-2.5-flash") : m_settings->llmModelId();
+
+        requestBody = QJsonObject{
+            {QStringLiteral("model"), modelId},
+            {QStringLiteral("project"), m_settings->geminiProjectId()},
+            {QStringLiteral("user_prompt_id"), QStringLiteral("jarvis-%1").arg(QDateTime::currentMSecsSinceEpoch())},
+            {QStringLiteral("request"), QJsonObject{
+                {QStringLiteral("contents"), contents},
+                {QStringLiteral("systemInstruction"), systemInstruction},
+                {QStringLiteral("generationConfig"), QJsonObject{
+                    {QStringLiteral("maxOutputTokens"), 2048},
+                    {QStringLiteral("temperature"), 0.7},
+                }},
+            }},
+        };
+
+        url = QUrl(m_settings->geminiCloudCodeUrl() + QStringLiteral(":streamGenerateContent"));
+        request.setUrl(url);
+        request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+        request.setTransferTimeout(120000);
+        request.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+
+    } else {
+        // Standard OpenAI-compatible API
+        QJsonArray messages = buildConversationContext();
+        requestBody[QStringLiteral("messages")] = messages;
+        requestBody[QStringLiteral("temperature")] = 0.7;
+        requestBody[QStringLiteral("max_tokens")] = 2048;
+        requestBody[QStringLiteral("stream")] = true;
+
+        if (m_settings->providerNeedsModelInRequest()) {
+            QString modelId = m_settings->llmModelId();
+            if (modelId.isEmpty()) {
+                m_processing = false;
+                emit processingChanged();
+                setStatus("No model selected. Please choose a model in settings.");
+                emit errorOccurred("No model selected.");
+                if (!m_conversationHistory.empty()) m_conversationHistory.pop_back();
+                return;
+            }
+            requestBody[QStringLiteral("model")] = modelId;
+        }
+
+        url = QUrl(m_settings->chatCompletionsUrl());
+        request.setUrl(url);
+        request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+        request.setTransferTimeout(120000);
+
+        if (m_settings->providerNeedsApiKey()) {
+            const QString apiKey = m_settings->activeApiKey();
+            if (apiKey.isEmpty()) {
+                if (m_settings->hasOAuthCredentials()) {
+                    m_pendingOAuthMessage = userMessage;
+                    setStatus("Refreshing authentication token, Sir...");
+                    m_settings->ensureOAuthToken();
+                    return;
+                }
+                m_processing = false;
+                emit processingChanged();
+                setStatus("No API key configured for this provider, Sir.");
+                emit errorOccurred("No API key configured. Please set one in settings.");
+                return;
+            }
+            request.setRawHeader("Authorization",
+                QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+        }
+    }
 
     m_streamReply = m_networkManager->post(request, QJsonDocument(requestBody).toJson());
     connect(m_streamReply, &QNetworkReply::readyRead, this, &JarvisBackend::onLlmStreamReadyRead);
@@ -522,6 +624,18 @@ QString JarvisBackend::extractStreamToken(const QString &jsonStr) const
 
     const auto obj = doc.object();
 
+    // Gemini Cloud Code format: {"response":{"candidates":[{"content":{"parts":[{"text":"..."}]}}]}}
+    if (m_settings->isGeminiOAuthMode()) {
+        const auto response = obj[QStringLiteral("response")].toObject();
+        const auto candidates = response[QStringLiteral("candidates")].toArray();
+        if (candidates.isEmpty()) return {};
+        const auto parts = candidates[0].toObject()
+            [QStringLiteral("content")].toObject()
+            [QStringLiteral("parts")].toArray();
+        if (parts.isEmpty()) return {};
+        return parts[0].toObject()[QStringLiteral("text")].toString();
+    }
+
     // OpenAI-compatible format (llama.cpp, Ollama, OpenAI, Gemini OpenAI-compat):
     // {"choices":[{"delta":{"content":"token"}}]}
     const auto choices = obj[QStringLiteral("choices")].toArray();
@@ -537,33 +651,73 @@ void JarvisBackend::onLlmStreamReadyRead()
     const QByteArray data = m_streamReply->readAll();
     m_streamBuffer += QString::fromUtf8(data);
 
-    // Process SSE lines: each chunk is "data: {...}\n\n"
-    while (true) {
-        const int nlPos = m_streamBuffer.indexOf(QLatin1Char('\n'));
-        if (nlPos < 0) break;
+    if (m_settings->isGeminiOAuthMode()) {
+        // Gemini Cloud Code returns a JSON array: [{...},{...},...]
+        // Parse complete JSON objects from the stream
+        while (true) {
+            // Find the start of a JSON object
+            int objStart = m_streamBuffer.indexOf(QLatin1Char('{'));
+            if (objStart < 0) break;
 
-        const QString line = m_streamBuffer.left(nlPos).trimmed();
-        m_streamBuffer = m_streamBuffer.mid(nlPos + 1);
+            // Find matching closing brace (simple depth counting)
+            int depth = 0;
+            int objEnd = -1;
+            bool inString = false;
+            bool escaped = false;
+            for (int i = objStart; i < m_streamBuffer.size(); ++i) {
+                const QChar ch = m_streamBuffer[i];
+                if (escaped) { escaped = false; continue; }
+                if (ch == QLatin1Char('\\') && inString) { escaped = true; continue; }
+                if (ch == QLatin1Char('"')) { inString = !inString; continue; }
+                if (inString) continue;
+                if (ch == QLatin1Char('{')) ++depth;
+                else if (ch == QLatin1Char('}')) {
+                    --depth;
+                    if (depth == 0) { objEnd = i; break; }
+                }
+            }
+            if (objEnd < 0) break; // Incomplete object, wait for more data
 
-        if (line.isEmpty() || line == QStringLiteral("data: [DONE]")) {
-            continue;
+            const QString jsonStr = m_streamBuffer.mid(objStart, objEnd - objStart + 1);
+            m_streamBuffer = m_streamBuffer.mid(objEnd + 1);
+
+            const QString content = extractStreamToken(jsonStr);
+            if (!content.isEmpty()) {
+                m_fullStreamedResponse += content;
+                m_streamingResponse = stripActionsFromResponse(m_fullStreamedResponse);
+                emit streamingResponseChanged();
+                trySpeakCompleteSentences();
+            }
         }
+    } else {
+        // SSE format: each chunk is "data: {...}\n\n"
+        while (true) {
+            const int nlPos = m_streamBuffer.indexOf(QLatin1Char('\n'));
+            if (nlPos < 0) break;
 
-        if (!line.startsWith(QStringLiteral("data: "))) {
-            continue;
-        }
+            const QString line = m_streamBuffer.left(nlPos).trimmed();
+            m_streamBuffer = m_streamBuffer.mid(nlPos + 1);
 
-        const QString content = extractStreamToken(line.mid(6));
+            if (line.isEmpty() || line == QStringLiteral("data: [DONE]")) {
+                continue;
+            }
 
-        if (!content.isEmpty()) {
-            m_fullStreamedResponse += content;
+            if (!line.startsWith(QStringLiteral("data: "))) {
+                continue;
+            }
 
-            // Update streaming response for QML (strip action blocks for display)
-            m_streamingResponse = stripActionsFromResponse(m_fullStreamedResponse);
-            emit streamingResponseChanged();
+            const QString content = extractStreamToken(line.mid(6));
 
-            // Try to speak any complete sentences that haven't been spoken yet
-            trySpeakCompleteSentences();
+            if (!content.isEmpty()) {
+                m_fullStreamedResponse += content;
+
+                // Update streaming response for QML (strip action blocks for display)
+                m_streamingResponse = stripActionsFromResponse(m_fullStreamedResponse);
+                emit streamingResponseChanged();
+
+                // Try to speak any complete sentences that haven't been spoken yet
+                trySpeakCompleteSentences();
+            }
         }
     }
 }
@@ -689,14 +843,23 @@ void JarvisBackend::onLlmStreamFinished()
 
 void JarvisBackend::checkConnection()
 {
-    // Cloud providers — don't ping, just report as not configured yet
+    // Cloud providers — don't ping the server, just check if credentials exist
     if (m_settings->providerNeedsApiKey()) {
+        const bool hasOAuth = m_settings->hasOAuthCredentials();
+        const bool hasKey = m_settings->isGeminiOAuthMode()
+            ? true  // OAuth creds checked via hasOAuth
+            : !m_settings->geminiApiKey().isEmpty() || !m_settings->openaiApiKey().isEmpty();
         const bool wasConnected = m_connected;
-        m_connected = false; // Will be true once API keys are supported
+
+        m_connected = hasKey || hasOAuth;
 
         if (m_connected != wasConnected) {
             emit connectedChanged();
-            setStatus("Cloud provider selected. API key support coming soon.");
+            if (m_connected) {
+                setStatus("Credentials ready. All systems operational, Sir.");
+            } else {
+                setStatus("No API credentials configured. Please log in or add an API key.");
+            }
         }
         return;
     }
@@ -771,7 +934,7 @@ void JarvisBackend::checkReminders()
             const QString text = it->text;
             emit reminderTriggered(text);
             speak(QStringLiteral("Excuse me, Sir. Reminder: %1").arg(text));
-            addToChatHistory("jarvis", QStringLiteral("⏰ Reminder: %1").arg(text));
+            addToChatHistory("jarvis", QStringLiteral("\u23f0 Reminder: %1").arg(text));
 
             it = m_reminders.erase(it);
             if (idx < m_activeReminders.size()) {
@@ -989,7 +1152,7 @@ void JarvisBackend::executeWriteFile(const QString &path, const QString &content
         addToChatHistory("system", QStringLiteral("File written: %1 (%2 bytes)").arg(expanded).arg(content.size()));
         qDebug() << "[JARVIS] File written successfully:" << expanded;
     } else {
-        const QString err = QStringLiteral("Failed to write file: %1 — %2").arg(expanded, file.errorString());
+        const QString err = QStringLiteral("Failed to write file: %1 \u2014 %2").arg(expanded, file.errorString());
         addToChatHistory("system", err);
         qWarning() << "[JARVIS]" << err;
     }

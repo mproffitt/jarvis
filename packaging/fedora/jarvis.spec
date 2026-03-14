@@ -21,6 +21,8 @@ BuildRequires:  cmake(Qt6Concurrent) >= 6.0
 BuildRequires:  kf6-plasma-devel
 BuildRequires:  kf6-ki18n-devel
 BuildRequires:  kf6-kconfig-devel
+BuildRequires:  kf6-kwallet-devel
+Requires:       kf6-kwallet%{?_isa}
 Requires:       kf6-plasma%{?_isa}
 Requires:       qt6-qtbase%{?_isa}
 Requires:       qt6-qtdeclarative%{?_isa}

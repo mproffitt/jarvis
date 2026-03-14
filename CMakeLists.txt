@@ -34,6 +34,7 @@ find_package(Qt6 REQUIRED COMPONENTS
 find_package(KF6 REQUIRED COMPONENTS
     I18n
     Config
+    Wallet
 )
 
 find_package(Plasma REQUIRED)
