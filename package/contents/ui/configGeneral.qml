@@ -722,6 +722,22 @@ Item {
                 value: JarvisBackend.voiceCmdMaxSeconds
                 onMoved: JarvisBackend.setVoiceCmdMaxSeconds(value)
             }
+
+            Slider {
+                id: silenceSlider
+                Kirigami.FormData.label: i18n("Silence timeout: %1 ms", value.toFixed(0))
+                from: 200; to: 3000; stepSize: 80
+                value: JarvisBackend.silenceTimeoutMs
+                onMoved: JarvisBackend.setSilenceTimeoutMs(value)
+            }
+
+            Label {
+                text: i18n("How long to wait after you stop speaking before processing. Lower = faster response, higher = fewer false stops.")
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+                color: Kirigami.Theme.disabledTextColor
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+            }
         }
 
         // ════════════════════════════════════════

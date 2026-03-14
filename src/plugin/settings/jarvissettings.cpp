@@ -159,6 +159,7 @@ void JarvisSettings::loadSettings()
     m_maxHistoryPairs = m_settings.value(QStringLiteral("chat/maxHistoryPairs"), 20).toInt();
     m_wakeBufferSeconds = m_settings.value(QStringLiteral("audio/wakeBufferSeconds"), 2).toInt();
     m_voiceCmdMaxSeconds = m_settings.value(QStringLiteral("audio/voiceCmdMaxSeconds"), 8).toInt();
+    m_silenceTimeoutMs = m_settings.value(QStringLiteral("audio/silenceTimeoutMs"), 640).toInt();
     m_autoStartWakeWord = m_settings.value(QStringLiteral("audio/autoStartWakeWord"), true).toBool();
     m_wakeWord = m_settings.value(QStringLiteral("audio/wakeWord"), QStringLiteral("jarvis")).toString();
     m_continuousMode = m_settings.value(QStringLiteral("audio/continuousMode"), false).toBool();
@@ -195,6 +196,7 @@ void JarvisSettings::saveSettings()
     m_settings.setValue(QStringLiteral("chat/maxHistoryPairs"), m_maxHistoryPairs);
     m_settings.setValue(QStringLiteral("audio/wakeBufferSeconds"), m_wakeBufferSeconds);
     m_settings.setValue(QStringLiteral("audio/voiceCmdMaxSeconds"), m_voiceCmdMaxSeconds);
+    m_settings.setValue(QStringLiteral("audio/silenceTimeoutMs"), m_silenceTimeoutMs);
     m_settings.setValue(QStringLiteral("audio/autoStartWakeWord"), m_autoStartWakeWord);
     m_settings.setValue(QStringLiteral("audio/wakeWord"), m_wakeWord);
     m_settings.setValue(QStringLiteral("audio/continuousMode"), m_continuousMode);
@@ -402,6 +404,16 @@ void JarvisSettings::setVoiceCmdMaxSeconds(int seconds)
         m_voiceCmdMaxSeconds = seconds;
         saveSettings();
         emit voiceCmdMaxSecondsChanged();
+    }
+}
+
+void JarvisSettings::setSilenceTimeoutMs(int ms)
+{
+    ms = qBound(200, ms, 3000);
+    if (m_silenceTimeoutMs != ms) {
+        m_silenceTimeoutMs = ms;
+        saveSettings();
+        emit silenceTimeoutMsChanged();
     }
 }
 

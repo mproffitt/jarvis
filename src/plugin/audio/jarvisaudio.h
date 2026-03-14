@@ -38,6 +38,7 @@ public:
     // Dynamic settings
     void updateWakeBufferInterval(int seconds);
     void updateVoiceCmdTimeout(int seconds);
+    void updateSilenceTimeout(int ms);
 
 signals:
     void listeningChanged();
@@ -81,7 +82,7 @@ private:
     bool m_speechStarted{false};
     static constexpr int SILENCE_CHECK_MS = 80;       // Check every 80ms
     static constexpr double SILENCE_THRESHOLD = 0.008; // Energy threshold (normalized 0-1)
-    static constexpr int SILENCE_CHUNKS_NEEDED = 8;    // 640ms of silence to stop
+    int m_silenceChunksNeeded{8};                      // 640ms default (configurable)
     static constexpr int MIN_SPEECH_CHUNKS = 3;        // Need 240ms of speech before silence detection
 
     whisper_context *m_whisperCtx{nullptr};

@@ -144,6 +144,10 @@ void JarvisBackend::connectModuleSignals()
         m_audio->updateVoiceCmdTimeout(m_settings->voiceCmdMaxSeconds());
         emit voiceCmdMaxSecondsChanged();
     });
+    connect(m_settings, &JarvisSettings::silenceTimeoutMsChanged, this, [this]() {
+        m_audio->updateSilenceTimeout(m_settings->silenceTimeoutMs());
+        emit silenceTimeoutMsChanged();
+    });
     connect(m_settings, &JarvisSettings::autoStartWakeWordChanged, this, &JarvisBackend::autoStartWakeWordChanged);
     connect(m_settings, &JarvisSettings::wakeWordChanged, this, &JarvisBackend::wakeWordChanged);
     connect(m_settings, &JarvisSettings::personalityPromptChanged, this, &JarvisBackend::personalityPromptChanged);
@@ -227,6 +231,7 @@ QString JarvisBackend::downloadStatus() const { return m_settings->downloadStatu
 int JarvisBackend::maxHistoryPairs() const { return m_settings->maxHistoryPairs(); }
 int JarvisBackend::wakeBufferSeconds() const { return m_settings->wakeBufferSeconds(); }
 int JarvisBackend::voiceCmdMaxSeconds() const { return m_settings->voiceCmdMaxSeconds(); }
+int JarvisBackend::silenceTimeoutMs() const { return m_settings->silenceTimeoutMs(); }
 bool JarvisBackend::autoStartWakeWord() const { return m_settings->autoStartWakeWord(); }
 QString JarvisBackend::wakeWord() const { return m_settings->wakeWord(); }
 QString JarvisBackend::personalityPrompt() const { return m_settings->personalityPrompt(); }
@@ -271,6 +276,7 @@ void JarvisBackend::setActiveTtsVoice(const QString &voiceId) { m_settings->setA
 void JarvisBackend::setMaxHistoryPairs(int pairs) { m_settings->setMaxHistoryPairs(pairs); }
 void JarvisBackend::setWakeBufferSeconds(int seconds) { m_settings->setWakeBufferSeconds(seconds); }
 void JarvisBackend::setVoiceCmdMaxSeconds(int seconds) { m_settings->setVoiceCmdMaxSeconds(seconds); }
+void JarvisBackend::setSilenceTimeoutMs(int ms) { m_settings->setSilenceTimeoutMs(ms); }
 void JarvisBackend::setAutoStartWakeWord(bool enabled) { m_settings->setAutoStartWakeWord(enabled); }
 void JarvisBackend::setWakeWord(const QString &word) { m_settings->setWakeWord(word); }
 

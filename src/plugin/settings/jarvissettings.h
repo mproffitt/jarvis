@@ -48,6 +48,7 @@ public:
     [[nodiscard]] int maxHistoryPairs() const { return m_maxHistoryPairs; }
     [[nodiscard]] int wakeBufferSeconds() const { return m_wakeBufferSeconds; }
     [[nodiscard]] int voiceCmdMaxSeconds() const { return m_voiceCmdMaxSeconds; }
+    [[nodiscard]] int silenceTimeoutMs() const { return m_silenceTimeoutMs; }
     [[nodiscard]] bool autoStartWakeWord() const { return m_autoStartWakeWord; }
     [[nodiscard]] QString wakeWord() const { return m_wakeWord; }
     [[nodiscard]] bool continuousMode() const { return m_continuousMode; }
@@ -68,6 +69,7 @@ public:
     void setMaxHistoryPairs(int pairs);
     void setWakeBufferSeconds(int seconds);
     void setVoiceCmdMaxSeconds(int seconds);
+    void setSilenceTimeoutMs(int ms);
     void setAutoStartWakeWord(bool enabled);
     void setWakeWord(const QString &word);
     void setContinuousMode(bool enabled);
@@ -115,6 +117,7 @@ signals:
     void maxHistoryPairsChanged();
     void wakeBufferSecondsChanged();
     void voiceCmdMaxSecondsChanged();
+    void silenceTimeoutMsChanged();
     void autoStartWakeWordChanged();
     void wakeWordChanged();
     void continuousModeChanged();
@@ -162,6 +165,7 @@ private:
     int m_maxHistoryPairs{20};
     int m_wakeBufferSeconds{2};
     int m_voiceCmdMaxSeconds{8};
+    int m_silenceTimeoutMs{640};
     bool m_autoStartWakeWord{true};
     QString m_wakeWord;
     bool m_continuousMode{false};

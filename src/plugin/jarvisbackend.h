@@ -79,6 +79,7 @@ class JarvisBackend : public QObject
     Q_PROPERTY(int maxHistoryPairs READ maxHistoryPairs NOTIFY maxHistoryPairsChanged)
     Q_PROPERTY(int wakeBufferSeconds READ wakeBufferSeconds NOTIFY wakeBufferSecondsChanged)
     Q_PROPERTY(int voiceCmdMaxSeconds READ voiceCmdMaxSeconds NOTIFY voiceCmdMaxSecondsChanged)
+    Q_PROPERTY(int silenceTimeoutMs READ silenceTimeoutMs NOTIFY silenceTimeoutMsChanged)
     Q_PROPERTY(bool autoStartWakeWord READ autoStartWakeWord NOTIFY autoStartWakeWordChanged)
     Q_PROPERTY(QString wakeWord READ wakeWord NOTIFY wakeWordChanged)
     Q_PROPERTY(QString personalityPrompt READ personalityPrompt NOTIFY personalityPromptChanged)
@@ -151,6 +152,7 @@ public:
     [[nodiscard]] int maxHistoryPairs() const;
     [[nodiscard]] int wakeBufferSeconds() const;
     [[nodiscard]] int voiceCmdMaxSeconds() const;
+    [[nodiscard]] int silenceTimeoutMs() const;
     [[nodiscard]] bool autoStartWakeWord() const;
     [[nodiscard]] QString wakeWord() const;
     [[nodiscard]] QString personalityPrompt() const;
@@ -204,6 +206,7 @@ public:
     Q_INVOKABLE void setMaxHistoryPairs(int pairs);
     Q_INVOKABLE void setWakeBufferSeconds(int seconds);
     Q_INVOKABLE void setVoiceCmdMaxSeconds(int seconds);
+    Q_INVOKABLE void setSilenceTimeoutMs(int ms);
     Q_INVOKABLE void setAutoStartWakeWord(bool enabled);
     Q_INVOKABLE void setWakeWord(const QString &word);
     Q_INVOKABLE void setContinuousMode(bool enabled);
@@ -262,6 +265,7 @@ signals:
     void maxHistoryPairsChanged();
     void wakeBufferSecondsChanged();
     void voiceCmdMaxSecondsChanged();
+    void silenceTimeoutMsChanged();
     void autoStartWakeWordChanged();
     void wakeWordChanged();
     void personalityPromptChanged();

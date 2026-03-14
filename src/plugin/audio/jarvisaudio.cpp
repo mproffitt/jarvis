@@ -30,6 +30,7 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
     connect(m_voiceCmdTimer, &QTimer::timeout, this, &JarvisAudio::processVoiceCommand);
 
     // Silence detection — checks audio energy during voice command mode
+    m_silenceChunksNeeded = m_settings->silenceTimeoutMs() / SILENCE_CHECK_MS;
     m_silenceTimer->setInterval(SILENCE_CHECK_MS);
     connect(m_silenceTimer, &QTimer::timeout, this, [this]() {
         if (!m_voiceCommandMode) return;
@@ -41,7 +42,7 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
             m_silentChunks = 0;
         } else if (m_speechStarted) {
             ++m_silentChunks;
-            if (m_silentChunks >= SILENCE_CHUNKS_NEEDED) {
+            if (m_silentChunks >= m_silenceChunksNeeded) {
                 qDebug() << "[JARVIS] Silence detected, stopping voice command";
                 m_voiceCmdTimer->stop();
                 m_silenceTimer->stop();
@@ -490,4 +491,9 @@ void JarvisAudio::updateWakeBufferInterval(int /* seconds */)
 void JarvisAudio::updateVoiceCmdTimeout(int seconds)
 {
     m_voiceCmdTimer->setInterval(seconds * 1000);
+}
+
+void JarvisAudio::updateSilenceTimeout(int ms)
+{
+    m_silenceChunksNeeded = qMax(1, ms / SILENCE_CHECK_MS);
 }
