@@ -6,6 +6,7 @@ import org.kde.plasma.jarvis 1.0
 
 Item {
     id: configRootItem
+    property string title: i18n("General")
     width: parent ? parent.width : 0
     height: parent ? parent.height : 0
 
@@ -49,14 +50,33 @@ Item {
         }
 
         // ════════════════════════════════════════
-        // LLM SERVER
+        // LLM PROVIDER
         // ════════════════════════════════════════
         Kirigami.FormLayout {
             Layout.fillWidth: true
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18n("LLM Server Connection")
+                Kirigami.FormData.label: i18n("LLM Provider")
+            }
+
+            ComboBox {
+                id: providerCombo
+                Kirigami.FormData.label: i18n("Provider:")
+                model: [
+                    { value: "llamacpp", text: "llama.cpp (local)" },
+                    { value: "ollama",   text: "Ollama (local)" }
+                ]
+                textRole: "text"
+                valueRole: "value"
+                currentIndex: {
+                    var p = JarvisBackend.llmProvider
+                    for (var i = 0; i < model.length; i++) {
+                        if (model[i].value === p) return i
+                    }
+                    return 0
+                }
+                onActivated: JarvisBackend.setLlmProvider(currentValue)
             }
 
             RowLayout {
@@ -65,7 +85,11 @@ Item {
                 TextField {
                     id: serverUrlField
                     text: JarvisBackend.llmServerUrl
-                    placeholderText: "http://127.0.0.1:8080"
+                    placeholderText: {
+                        var p = JarvisBackend.llmProvider
+                        if (p === "ollama") return "http://127.0.0.1:11434"
+                        return "http://127.0.0.1:8080"
+                    }
                     Layout.fillWidth: true
                     onAccepted: JarvisBackend.setLlmServerUrl(text)
                 }
@@ -74,6 +98,94 @@ Item {
                     icon.name: "dialog-ok-apply"
                     onClicked: JarvisBackend.setLlmServerUrl(serverUrlField.text)
                 }
+            }
+
+            // Model selector for cloud providers (dropdown)
+            ComboBox {
+                id: cloudModelCombo
+                Kirigami.FormData.label: i18n("Model:")
+                visible: JarvisBackend.llmProvider !== "llamacpp" && JarvisBackend.llmProvider !== "ollama"
+                Layout.fillWidth: true
+
+                property var choices: JarvisBackend.cloudModelChoices
+                property bool customMode: false
+
+                model: {
+                    var items = []
+                    var choices = JarvisBackend.cloudModelChoices
+                    for (var i = 0; i < choices.length; i++)
+                        items.push(choices[i].name + "  (" + choices[i].id + ")")
+                    items.push(i18n("Custom..."))
+                    return items
+                }
+
+                currentIndex: {
+                    var id = JarvisBackend.llmModelId
+                    var ch = JarvisBackend.cloudModelChoices
+                    for (var i = 0; i < ch.length; i++) {
+                        if (ch[i].id === id) return i
+                    }
+                    // Current model not in list — show Custom
+                    return ch.length
+                }
+
+                onActivated: function(index) {
+                    var ch = JarvisBackend.cloudModelChoices
+                    if (index >= 0 && index < ch.length) {
+                        customMode = false
+                        JarvisBackend.setLlmModelId(ch[index].id)
+                    } else {
+                        customMode = true
+                    }
+                }
+            }
+
+            // Custom model text field (shown when "Custom..." selected or model not in list)
+            RowLayout {
+                Kirigami.FormData.label: i18n("Custom model:")
+                visible: JarvisBackend.llmProvider !== "llamacpp" && JarvisBackend.llmProvider !== "ollama"
+                         && (cloudModelCombo.customMode || cloudModelCombo.currentIndex >= JarvisBackend.cloudModelChoices.length)
+                spacing: Kirigami.Units.smallSpacing
+                TextField {
+                    id: customModelField
+                    text: JarvisBackend.llmModelId
+                    placeholderText: i18n("Enter model ID...")
+                    Layout.fillWidth: true
+                    onAccepted: JarvisBackend.setLlmModelId(text)
+                }
+                Button {
+                    text: i18n("Apply")
+                    icon.name: "dialog-ok-apply"
+                    onClicked: JarvisBackend.setLlmModelId(customModelField.text)
+                }
+            }
+
+            // Model ID for Ollama (text field — models listed separately below)
+            RowLayout {
+                Kirigami.FormData.label: i18n("Model:")
+                visible: JarvisBackend.llmProvider === "ollama"
+                spacing: Kirigami.Units.smallSpacing
+                TextField {
+                    id: modelIdField
+                    text: JarvisBackend.llmModelId
+                    placeholderText: "llama3.2"
+                    Layout.fillWidth: true
+                    onAccepted: JarvisBackend.setLlmModelId(text)
+                }
+                Button {
+                    text: i18n("Apply")
+                    icon.name: "dialog-ok-apply"
+                    onClicked: JarvisBackend.setLlmModelId(modelIdField.text)
+                }
+            }
+
+            Label {
+                visible: JarvisBackend.llmProvider === "openai" || JarvisBackend.llmProvider === "gemini" || JarvisBackend.llmProvider === "claude"
+                text: i18n("Cloud provider selected. API key configuration coming in a future update.")
+                color: Kirigami.Theme.disabledTextColor
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
             }
 
             RowLayout {
@@ -93,24 +205,26 @@ Item {
 
             Label {
                 Kirigami.FormData.label: i18n("Active model:")
+                visible: JarvisBackend.llmProvider === "llamacpp"
                 text: JarvisBackend.currentModelName || i18n("None selected")
                 font.bold: true
             }
         }
 
         // ════════════════════════════════════════
-        // LLM MODELS
+        // LLM MODELS (llama.cpp GGUF models)
         // ════════════════════════════════════════
         Kirigami.FormLayout {
             Layout.fillWidth: true
+            visible: JarvisBackend.llmProvider === "llamacpp"
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18n("LLM Models (GGUF for llama.cpp)")
+                Kirigami.FormData.label: i18n("GGUF Models (llama.cpp)")
             }
 
             Label {
-                text: i18n("Select a model to use with your local LLM server. Smaller models are faster but less capable.")
+                text: i18n("Download GGUF models for your local llama.cpp server. Smaller models are faster but less capable.")
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
                 color: Kirigami.Theme.disabledTextColor
@@ -119,7 +233,7 @@ Item {
         }
 
         Repeater {
-            model: JarvisBackend.availableLlmModels
+            model: JarvisBackend.llmProvider === "llamacpp" ? JarvisBackend.availableLlmModels : []
             delegate: Kirigami.AbstractCard {
                 Layout.fillWidth: true
                 Layout.leftMargin: Kirigami.Units.smallSpacing
@@ -172,9 +286,84 @@ Item {
         Button {
             text: i18n("Fetch More Models")
             icon.name: "list-add"
+            visible: JarvisBackend.llmProvider === "llamacpp"
             Layout.leftMargin: Kirigami.Units.largeSpacing
             Layout.topMargin: Kirigami.Units.smallSpacing
             onClicked: JarvisBackend.fetchMoreModels()
+        }
+
+        // ════════════════════════════════════════
+        // OLLAMA MODELS
+        // ════════════════════════════════════════
+        Kirigami.FormLayout {
+            Layout.fillWidth: true
+            visible: JarvisBackend.llmProvider === "ollama"
+
+            Kirigami.Separator {
+                Kirigami.FormData.isSection: true
+                Kirigami.FormData.label: i18n("Ollama Models")
+            }
+
+            Label {
+                text: i18n("Models installed in Ollama. Select one to use, or type a model name in the field above.")
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+                color: Kirigami.Theme.disabledTextColor
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+            }
+        }
+
+        Repeater {
+            model: JarvisBackend.llmProvider === "ollama" ? JarvisBackend.availableLlmModels : []
+            delegate: Kirigami.AbstractCard {
+                Layout.fillWidth: true
+                Layout.leftMargin: Kirigami.Units.smallSpacing
+                Layout.rightMargin: Kirigami.Units.smallSpacing
+                contentItem: RowLayout {
+                    spacing: Kirigami.Units.largeSpacing
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 2
+                        RowLayout {
+                            spacing: Kirigami.Units.smallSpacing
+                            Label {
+                                text: modelData.name
+                                font.bold: true
+                            }
+                            Label {
+                                text: modelData.size
+                                color: Kirigami.Theme.disabledTextColor
+                                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                            }
+                            Kirigami.Icon {
+                                visible: modelData.active
+                                source: "emblem-default"
+                                implicitWidth: Kirigami.Units.iconSizes.small
+                                implicitHeight: Kirigami.Units.iconSizes.small
+                            }
+                        }
+                    }
+                    Button {
+                        text: modelData.active ? i18n("Active") : i18n("Select")
+                        icon.name: modelData.active ? "checkmark" : "media-playback-start"
+                        enabled: !modelData.active
+                        highlighted: modelData.active
+                        onClicked: {
+                            JarvisBackend.setLlmModelId(modelData.id)
+                            JarvisBackend.refreshOllamaModels()
+                        }
+                    }
+                }
+            }
+        }
+
+        Button {
+            text: i18n("Refresh Models")
+            icon.name: "view-refresh"
+            visible: JarvisBackend.llmProvider === "ollama"
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.topMargin: Kirigami.Units.smallSpacing
+            onClicked: JarvisBackend.refreshOllamaModels()
         }
 
         // ════════════════════════════════════════

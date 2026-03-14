@@ -72,10 +72,23 @@ void JarvisBackend::connectModuleSignals()
     connect(m_system, &JarvisSystem::currentTimeChanged, this, &JarvisBackend::currentTimeChanged);
 
     // Settings → Backend
+    connect(m_settings, &JarvisSettings::llmProviderChanged, this, [this]() {
+        // Cancel any in-flight LLM request from the previous provider
+        if (m_streamReply) {
+            m_streamReply->abort();
+            m_streamReply->deleteLater();
+            m_streamReply = nullptr;
+            m_processing = false;
+            emit processingChanged();
+        }
+        emit llmProviderChanged();
+        checkConnection();
+    });
     connect(m_settings, &JarvisSettings::llmServerUrlChanged, this, [this]() {
         emit llmServerUrlChanged();
         checkConnection();
     });
+    connect(m_settings, &JarvisSettings::llmModelIdChanged, this, &JarvisBackend::llmModelIdChanged);
     connect(m_settings, &JarvisSettings::currentModelNameChanged, this, [this]() {
         emit currentModelNameChanged();
         setStatus(QStringLiteral("LLM model set to: ") + m_settings->currentModelName());
@@ -103,6 +116,7 @@ void JarvisBackend::connectModuleSignals()
     connect(m_settings, &JarvisSettings::ttsVolumeChanged, this, [this]() { m_tts->onTtsVolumeChanged(); });
     connect(m_settings, &JarvisSettings::ttsMutedChanged, this, &JarvisBackend::ttsMutedChanged);
     connect(m_settings, &JarvisSettings::voiceActivated, m_tts, &JarvisTts::onVoiceActivated);
+    connect(m_settings, &JarvisSettings::cloudModelChoicesChanged, this, &JarvisBackend::cloudModelChoicesChanged);
 
     // Commands → Backend
     connect(m_commands, &JarvisCommands::commandMappingsChanged, this, &JarvisBackend::commandMappingsChanged);
@@ -140,10 +154,13 @@ QString JarvisBackend::currentTime() const { return m_system->currentTime(); }
 QString JarvisBackend::currentDate() const { return m_system->currentDate(); }
 QString JarvisBackend::greeting() const { return m_system->greeting(); }
 
+QString JarvisBackend::llmProvider() const { return m_settings->llmProvider(); }
 QString JarvisBackend::llmServerUrl() const { return m_settings->llmServerUrl(); }
+QString JarvisBackend::llmModelId() const { return m_settings->llmModelId(); }
 QString JarvisBackend::currentModelName() const { return m_settings->currentModelName(); }
 QString JarvisBackend::currentVoiceName() const { return m_settings->currentVoiceName(); }
 QVariantList JarvisBackend::availableLlmModels() const { return m_settings->availableLlmModels(); }
+QVariantList JarvisBackend::cloudModelChoices() const { return m_settings->cloudModelChoices(); }
 QVariantList JarvisBackend::availableTtsVoices() const { return m_settings->availableTtsVoices(); }
 double JarvisBackend::downloadProgress() const { return m_settings->downloadProgress(); }
 bool JarvisBackend::isDownloading() const { return m_settings->isDownloading(); }
@@ -170,7 +187,20 @@ void JarvisBackend::stopVoiceCommand() { m_audio->stopVoiceCommand(); }
 void JarvisBackend::setTtsRate(double rate) { m_settings->setTtsRate(rate); }
 void JarvisBackend::setTtsPitch(double pitch) { m_settings->setTtsPitch(pitch); }
 void JarvisBackend::setTtsVolume(double volume) { m_settings->setTtsVolume(volume); }
+void JarvisBackend::setLlmProvider(const QString &provider) { m_settings->setLlmProvider(provider); }
 void JarvisBackend::setLlmServerUrl(const QString &url) { m_settings->setLlmServerUrl(url); }
+void JarvisBackend::setLlmModelId(const QString &modelId) { m_settings->setLlmModelId(modelId); }
+void JarvisBackend::refreshOllamaModels()
+{
+    m_settings->fetchOllamaModels();
+    emit availableLlmModelsChanged();
+}
+
+void JarvisBackend::refreshCloudModels()
+{
+    m_settings->fetchCloudModels();
+}
+
 void JarvisBackend::downloadLlmModel(const QString &modelId) { m_settings->downloadLlmModel(modelId); }
 void JarvisBackend::downloadTtsVoice(const QString &voiceId) { m_settings->downloadTtsVoice(voiceId); }
 void JarvisBackend::setActiveLlmModel(const QString &modelId) { m_settings->setActiveLlmModel(modelId); }
@@ -317,10 +347,29 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
     requestBody[QStringLiteral("max_tokens")] = 2048;
     requestBody[QStringLiteral("stream")] = true;
 
-    const QUrl url(m_settings->llmServerUrl() + QStringLiteral("/v1/chat/completions"));
+    // Add model to request body for non-llamacpp providers
+    if (m_settings->providerNeedsModelInRequest()) {
+        const QString modelId = m_settings->llmModelId();
+        if (!modelId.isEmpty())
+            requestBody[QStringLiteral("model")] = modelId;
+    }
+
+    const QUrl url(m_settings->chatCompletionsUrl());
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setTransferTimeout(120000);
+
+    // Cloud providers need API key — for now just check and warn
+    if (m_settings->providerNeedsApiKey()) {
+        m_processing = false;
+        emit processingChanged();
+        setStatus("No API key configured for this provider, Sir. API key support coming soon.");
+        emit errorOccurred("No API key configured. Cloud provider support requires API keys (coming in a future update).");
+        if (!m_conversationHistory.empty()) {
+            m_conversationHistory.pop_back();
+        }
+        return;
+    }
 
     // Reset streaming state
     m_streamBuffer.clear();
@@ -334,10 +383,8 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
     connect(m_streamReply, &QNetworkReply::finished, this, &JarvisBackend::onLlmStreamFinished);
 }
 
-QJsonArray JarvisBackend::buildConversationContext() const
+QString JarvisBackend::buildSystemPrompt() const
 {
-    QJsonArray messages;
-
     QString systemPrompt = m_settings->personalityPrompt().isEmpty()
         ? QString::fromUtf8(JARVIS_SYSTEM_PROMPT) : m_settings->personalityPrompt();
     systemPrompt += QStringLiteral("\n\nCurrent system status:\n");
@@ -354,10 +401,16 @@ QJsonArray JarvisBackend::buildConversationContext() const
     if (!m_reminders.empty()) {
         systemPrompt += QStringLiteral("- Active reminders: %1\n").arg(m_reminders.size());
     }
+    return systemPrompt;
+}
+
+QJsonArray JarvisBackend::buildConversationContext() const
+{
+    QJsonArray messages;
 
     QJsonObject systemMsg;
     systemMsg[QStringLiteral("role")] = QStringLiteral("system");
-    systemMsg[QStringLiteral("content")] = systemPrompt;
+    systemMsg[QStringLiteral("content")] = buildSystemPrompt();
     messages.append(systemMsg);
 
     for (const auto &[role, content] : m_conversationHistory) {
@@ -368,6 +421,21 @@ QJsonArray JarvisBackend::buildConversationContext() const
     }
 
     return messages;
+}
+
+QString JarvisBackend::extractStreamToken(const QString &jsonStr) const
+{
+    const auto doc = QJsonDocument::fromJson(jsonStr.toUtf8());
+    if (doc.isNull()) return {};
+
+    const auto obj = doc.object();
+
+    // OpenAI-compatible format (llama.cpp, Ollama, OpenAI, Gemini OpenAI-compat):
+    // {"choices":[{"delta":{"content":"token"}}]}
+    const auto choices = obj[QStringLiteral("choices")].toArray();
+    if (choices.isEmpty()) return {};
+    return choices[0].toObject()[QStringLiteral("delta")].toObject()
+                      [QStringLiteral("content")].toString();
 }
 
 void JarvisBackend::onLlmStreamReadyRead()
@@ -393,16 +461,7 @@ void JarvisBackend::onLlmStreamReadyRead()
             continue;
         }
 
-        const QString jsonStr = line.mid(6); // skip "data: "
-        const auto doc = QJsonDocument::fromJson(jsonStr.toUtf8());
-        if (doc.isNull()) continue;
-
-        const auto obj = doc.object();
-        const auto choices = obj[QStringLiteral("choices")].toArray();
-        if (choices.isEmpty()) continue;
-
-        const auto delta = choices[0].toObject()[QStringLiteral("delta")].toObject();
-        const QString content = delta[QStringLiteral("content")].toString();
+        const QString content = extractStreamToken(line.mid(6));
 
         if (!content.isEmpty()) {
             m_fullStreamedResponse += content;
@@ -518,14 +577,7 @@ void JarvisBackend::onLlmStreamFinished()
         if (line.isEmpty() || line == QStringLiteral("data: [DONE]")) continue;
         if (!line.startsWith(QStringLiteral("data: "))) continue;
 
-        const auto doc = QJsonDocument::fromJson(line.mid(6).toUtf8());
-        if (doc.isNull()) continue;
-
-        const auto choices = doc.object()[QStringLiteral("choices")].toArray();
-        if (choices.isEmpty()) continue;
-
-        const QString content = choices[0].toObject()[QStringLiteral("delta")].toObject()
-                                    [QStringLiteral("content")].toString();
+        const QString content = extractStreamToken(line.mid(6));
         if (!content.isEmpty()) {
             m_fullStreamedResponse += content;
         }
@@ -537,7 +589,20 @@ void JarvisBackend::onLlmStreamFinished()
 
 void JarvisBackend::checkConnection()
 {
-    const QUrl url(m_settings->llmServerUrl() + QStringLiteral("/health"));
+    // Cloud providers — don't ping, just report as not configured yet
+    if (m_settings->providerNeedsApiKey()) {
+        const bool wasConnected = m_connected;
+        m_connected = false; // Will be true once API keys are supported
+
+        if (m_connected != wasConnected) {
+            emit connectedChanged();
+            setStatus("Cloud provider selected. API key support coming soon.");
+        }
+        return;
+    }
+
+    // Local providers (llama.cpp, Ollama) — actually ping the server
+    const QUrl url(m_settings->healthCheckUrl());
     QNetworkRequest request(url);
     request.setTransferTimeout(5000);
 

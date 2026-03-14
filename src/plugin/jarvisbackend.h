@@ -62,10 +62,13 @@ class JarvisBackend : public QObject
     Q_PROPERTY(QVariantList activeReminders READ activeReminders NOTIFY remindersChanged)
 
     // Settings properties (delegated to JarvisSettings, exposed for config QML)
+    Q_PROPERTY(QString llmProvider READ llmProvider NOTIFY llmProviderChanged)
     Q_PROPERTY(QString llmServerUrl READ llmServerUrl NOTIFY llmServerUrlChanged)
+    Q_PROPERTY(QString llmModelId READ llmModelId NOTIFY llmModelIdChanged)
     Q_PROPERTY(QString currentModelName READ currentModelName NOTIFY currentModelNameChanged)
     Q_PROPERTY(QString currentVoiceName READ currentVoiceName NOTIFY currentVoiceNameChanged)
     Q_PROPERTY(QVariantList availableLlmModels READ availableLlmModels NOTIFY availableLlmModelsChanged)
+    Q_PROPERTY(QVariantList cloudModelChoices READ cloudModelChoices NOTIFY cloudModelChoicesChanged)
     Q_PROPERTY(QVariantList availableTtsVoices READ availableTtsVoices NOTIFY availableTtsVoicesChanged)
     Q_PROPERTY(double downloadProgress READ downloadProgress NOTIFY downloadProgressChanged)
     Q_PROPERTY(bool downloading READ isDownloading NOTIFY downloadingChanged)
@@ -119,10 +122,13 @@ public:
     [[nodiscard]] QVariantList activeReminders() const { return m_activeReminders; }
 
     // Settings (delegated)
+    [[nodiscard]] QString llmProvider() const;
     [[nodiscard]] QString llmServerUrl() const;
+    [[nodiscard]] QString llmModelId() const;
     [[nodiscard]] QString currentModelName() const;
     [[nodiscard]] QString currentVoiceName() const;
     [[nodiscard]] QVariantList availableLlmModels() const;
+    [[nodiscard]] QVariantList cloudModelChoices() const;
     [[nodiscard]] QVariantList availableTtsVoices() const;
     [[nodiscard]] double downloadProgress() const;
     [[nodiscard]] bool isDownloading() const;
@@ -159,7 +165,11 @@ public:
     Q_INVOKABLE void toggleTtsMute();
 
     // Settings invokables
+    Q_INVOKABLE void setLlmProvider(const QString &provider);
     Q_INVOKABLE void setLlmServerUrl(const QString &url);
+    Q_INVOKABLE void setLlmModelId(const QString &modelId);
+    Q_INVOKABLE void refreshOllamaModels();
+    Q_INVOKABLE void refreshCloudModels();
     Q_INVOKABLE void downloadLlmModel(const QString &modelId);
     Q_INVOKABLE void downloadTtsVoice(const QString &voiceId);
     Q_INVOKABLE void setActiveLlmModel(const QString &modelId);
@@ -202,7 +212,9 @@ signals:
     void remindersChanged();
     void reminderTriggered(const QString &text);
     void ttsMutedChanged();
+    void llmProviderChanged();
     void llmServerUrlChanged();
+    void llmModelIdChanged();
     void currentModelNameChanged();
     void currentVoiceNameChanged();
     void downloadProgressChanged();
@@ -215,6 +227,7 @@ signals:
     void personalityPromptChanged();
     void commandMappingsChanged();
     void availableLlmModelsChanged();
+    void cloudModelChoicesChanged();
     void availableTtsVoicesChanged();
 
 private slots:
@@ -229,6 +242,8 @@ private:
     void setStatus(const QString &status);
     void addToChatHistory(const QString &role, const QString &message);
     QJsonArray buildConversationContext() const;
+    QString buildSystemPrompt() const;
+    QString extractStreamToken(const QString &jsonStr) const;
     void connectModuleSignals();
     void trySpeakCompleteSentences();
     void finalizeStreamingResponse();

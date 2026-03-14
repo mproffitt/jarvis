@@ -17,6 +17,8 @@ public:
 
     // Getters
     [[nodiscard]] QString llmServerUrl() const { return m_llmServerUrl; }
+    [[nodiscard]] QString llmProvider() const { return m_llmProvider; }
+    [[nodiscard]] QString llmModelId() const { return m_llmModelId; }
     [[nodiscard]] QString currentModelName() const { return m_currentModelName; }
     [[nodiscard]] QString currentVoiceName() const { return m_currentVoiceName; }
     [[nodiscard]] QVariantList availableLlmModels() const { return m_availableLlmModels; }
@@ -36,6 +38,8 @@ public:
 
     // Setters
     void setLlmServerUrl(const QString &url);
+    void setLlmProvider(const QString &provider);
+    void setLlmModelId(const QString &modelId);
     void setCurrentModelName(const QString &name);
     void setMaxHistoryPairs(int pairs);
     void setWakeBufferSeconds(int seconds);
@@ -57,13 +61,23 @@ public:
     // Helpers
     [[nodiscard]] QString jarvisDataDir() const;
     [[nodiscard]] QString piperModelPath() const { return m_piperModelPath; }
+    [[nodiscard]] QString chatCompletionsUrl() const;
+    [[nodiscard]] QString healthCheckUrl() const;
+    [[nodiscard]] bool providerNeedsApiKey() const;
+    [[nodiscard]] bool providerNeedsModelInRequest() const;
+    [[nodiscard]] QString defaultUrlForProvider(const QString &provider) const;
+    [[nodiscard]] QVariantList cloudModelChoices() const { return m_cloudModelChoices; }
+    void fetchCloudModels();
     void populateModelList();
     void populateVoiceList();
     void fetchMoreModels();
     void fetchMoreVoices();
+    void fetchOllamaModels();
 
 signals:
     void llmServerUrlChanged();
+    void llmProviderChanged();
+    void llmModelIdChanged();
     void currentModelNameChanged();
     void currentVoiceNameChanged();
     void downloadProgressChanged();
@@ -79,6 +93,7 @@ signals:
     void ttsVolumeChanged();
     void ttsMutedChanged();
     void voiceActivated(const QString &voiceId, const QString &onnxPath);
+    void cloudModelChoicesChanged();
 
 private:
     void loadSettings();
@@ -87,7 +102,9 @@ private:
     QSettings m_settings{QStringLiteral("jarvis-plasmoid"), QStringLiteral("jarvis")};
     QNetworkAccessManager *m_networkManager{nullptr};
 
+    QString m_llmProvider{QStringLiteral("llamacpp")};
     QString m_llmServerUrl{QStringLiteral("http://127.0.0.1:8080")};
+    QString m_llmModelId;
     QString m_currentModelName;
     QString m_currentVoiceName;
     QVariantList m_availableLlmModels;
@@ -106,4 +123,5 @@ private:
     double m_ttsVolume{0.85};
     bool m_ttsMuted{false};
     QString m_piperModelPath;
+    QVariantList m_cloudModelChoices;
 };

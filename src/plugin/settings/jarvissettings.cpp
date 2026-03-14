@@ -3,6 +3,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QNetworkRequest>
 
 JarvisSettings::JarvisSettings(QNetworkAccessManager *nam, QObject *parent)
@@ -10,7 +13,14 @@ JarvisSettings::JarvisSettings(QNetworkAccessManager *nam, QObject *parent)
     , m_networkManager(nam)
 {
     loadSettings();
-    populateModelList();
+
+    if (m_llmProvider == QStringLiteral("ollama")) {
+        fetchOllamaModels();
+    } else if (m_llmProvider == QStringLiteral("llamacpp")) {
+        populateModelList();
+    } else {
+        fetchCloudModels();
+    }
     populateVoiceList();
 }
 
@@ -31,8 +41,11 @@ QString JarvisSettings::jarvisDataDir() const
 
 void JarvisSettings::loadSettings()
 {
+    m_llmProvider = m_settings.value(QStringLiteral("llm/provider"),
+                                      QStringLiteral("llamacpp")).toString();
     m_llmServerUrl = m_settings.value(QStringLiteral("llm/serverUrl"),
-                                       QStringLiteral("http://127.0.0.1:8080")).toString();
+                                       defaultUrlForProvider(m_llmProvider)).toString();
+    m_llmModelId = m_settings.value(QStringLiteral("llm/modelId")).toString();
     m_currentModelName = m_settings.value(QStringLiteral("llm/modelName"),
                                            QStringLiteral("Qwen2.5-Coder-1.5B-Instruct")).toString();
     m_currentVoiceName = m_settings.value(QStringLiteral("tts/voiceName"),
@@ -66,7 +79,9 @@ void JarvisSettings::loadSettings()
 
 void JarvisSettings::saveSettings()
 {
+    m_settings.setValue(QStringLiteral("llm/provider"), m_llmProvider);
     m_settings.setValue(QStringLiteral("llm/serverUrl"), m_llmServerUrl);
+    m_settings.setValue(QStringLiteral("llm/modelId"), m_llmModelId);
     m_settings.setValue(QStringLiteral("llm/modelName"), m_currentModelName);
     m_settings.setValue(QStringLiteral("tts/voiceName"), m_currentVoiceName);
     m_settings.setValue(QStringLiteral("chat/maxHistoryPairs"), m_maxHistoryPairs);
@@ -91,6 +106,38 @@ void JarvisSettings::setLlmServerUrl(const QString &url)
         m_llmServerUrl = url;
         saveSettings();
         emit llmServerUrlChanged();
+    }
+}
+
+void JarvisSettings::setLlmProvider(const QString &provider)
+{
+    if (m_llmProvider != provider) {
+        m_llmProvider = provider;
+        // Update URL to the default for this provider
+        m_llmServerUrl = defaultUrlForProvider(provider);
+        // Clear model ID — each provider has different models
+        m_llmModelId.clear();
+        saveSettings();
+        emit llmProviderChanged();
+        emit llmServerUrlChanged();
+        emit llmModelIdChanged();
+        // Refresh model list for the new provider
+        if (provider == QStringLiteral("ollama")) {
+            fetchOllamaModels();
+        } else if (provider == QStringLiteral("llamacpp")) {
+            populateModelList();
+        } else {
+            fetchCloudModels();
+        }
+    }
+}
+
+void JarvisSettings::setLlmModelId(const QString &modelId)
+{
+    if (m_llmModelId != modelId) {
+        m_llmModelId = modelId;
+        saveSettings();
+        emit llmModelIdChanged();
     }
 }
 
@@ -179,6 +226,134 @@ void JarvisSettings::setTtsMuted(bool muted)
         saveSettings();
         emit ttsMutedChanged();
     }
+}
+
+// ─────────────────────────────────────────────
+// Provider Helpers
+// ─────────────────────────────────────────────
+
+QString JarvisSettings::defaultUrlForProvider(const QString &provider) const
+{
+    if (provider == QStringLiteral("ollama"))
+        return QStringLiteral("http://127.0.0.1:11434");
+    if (provider == QStringLiteral("openai"))
+        return QStringLiteral("https://api.openai.com");
+    if (provider == QStringLiteral("gemini"))
+        return QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai");
+    if (provider == QStringLiteral("claude"))
+        return QStringLiteral("https://api.anthropic.com");
+    // llamacpp default
+    return QStringLiteral("http://127.0.0.1:8080");
+}
+
+QString JarvisSettings::chatCompletionsUrl() const
+{
+    if (m_llmProvider == QStringLiteral("ollama"))
+        return m_llmServerUrl + QStringLiteral("/v1/chat/completions");
+    if (m_llmProvider == QStringLiteral("openai"))
+        return m_llmServerUrl + QStringLiteral("/v1/chat/completions");
+    if (m_llmProvider == QStringLiteral("gemini"))
+        return m_llmServerUrl + QStringLiteral("/chat/completions");
+    if (m_llmProvider == QStringLiteral("claude"))
+        return m_llmServerUrl + QStringLiteral("/v1/messages");
+    // llamacpp
+    return m_llmServerUrl + QStringLiteral("/v1/chat/completions");
+}
+
+QString JarvisSettings::healthCheckUrl() const
+{
+    if (m_llmProvider == QStringLiteral("ollama"))
+        return m_llmServerUrl + QStringLiteral("/api/tags");
+    if (m_llmProvider == QStringLiteral("openai"))
+        return m_llmServerUrl + QStringLiteral("/v1/models");
+    if (m_llmProvider == QStringLiteral("gemini"))
+        return m_llmServerUrl + QStringLiteral("/models");
+    if (m_llmProvider == QStringLiteral("claude"))
+        return m_llmServerUrl + QStringLiteral("/v1/models");
+    // llamacpp
+    return m_llmServerUrl + QStringLiteral("/health");
+}
+
+bool JarvisSettings::providerNeedsApiKey() const
+{
+    return m_llmProvider == QStringLiteral("openai")
+        || m_llmProvider == QStringLiteral("gemini")
+        || m_llmProvider == QStringLiteral("claude");
+}
+
+bool JarvisSettings::providerNeedsModelInRequest() const
+{
+    return m_llmProvider != QStringLiteral("llamacpp");
+}
+
+void JarvisSettings::fetchCloudModels()
+{
+    if (m_llmProvider == QStringLiteral("llamacpp") || m_llmProvider == QStringLiteral("ollama"))
+        return;
+
+    // Cloud model choices — hardcoded defaults for now (API key fields come in a later commit)
+    if (m_llmProvider == QStringLiteral("openai")) {
+        m_cloudModelChoices = {
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("gpt-4o")},
+                        {QStringLiteral("name"), QStringLiteral("GPT-4o")}},
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("gpt-4o-mini")},
+                        {QStringLiteral("name"), QStringLiteral("GPT-4o Mini")}},
+        };
+    } else if (m_llmProvider == QStringLiteral("gemini")) {
+        m_cloudModelChoices = {
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("gemini-2.5-flash")},
+                        {QStringLiteral("name"), QStringLiteral("Gemini 2.5 Flash")}},
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("gemini-2.5-pro")},
+                        {QStringLiteral("name"), QStringLiteral("Gemini 2.5 Pro")}},
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("gemini-2.0-flash")},
+                        {QStringLiteral("name"), QStringLiteral("Gemini 2.0 Flash")}},
+        };
+    } else if (m_llmProvider == QStringLiteral("claude")) {
+        m_cloudModelChoices = {
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("claude-sonnet-4-20250514")},
+                        {QStringLiteral("name"), QStringLiteral("Claude Sonnet 4")}},
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("claude-3-5-sonnet-20241022")},
+                        {QStringLiteral("name"), QStringLiteral("Claude 3.5 Sonnet")}},
+        };
+    }
+    emit cloudModelChoicesChanged();
+}
+
+void JarvisSettings::fetchOllamaModels()
+{
+    if (m_llmProvider != QStringLiteral("ollama")) return;
+
+    const QUrl url(m_llmServerUrl + QStringLiteral("/api/tags"));
+    QNetworkRequest request(url);
+    request.setTransferTimeout(5000);
+
+    auto *reply = m_networkManager->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) return;
+
+        const auto doc = QJsonDocument::fromJson(reply->readAll());
+        if (doc.isNull()) return;
+
+        const auto models = doc.object()[QStringLiteral("models")].toArray();
+        m_availableLlmModels.clear();
+
+        for (const auto &m : models) {
+            const auto obj = m.toObject();
+            const QString name = obj[QStringLiteral("name")].toString();
+            const qint64 size = obj[QStringLiteral("size")].toVariant().toLongLong();
+            const QString sizeStr = QStringLiteral("%1 GB").arg(size / 1073741824.0, 0, 'f', 1);
+
+            m_availableLlmModels.append(QVariantMap{
+                {QStringLiteral("id"), name},
+                {QStringLiteral("name"), name},
+                {QStringLiteral("size"), sizeStr},
+                {QStringLiteral("desc"), QStringLiteral("Installed in Ollama")},
+                {QStringLiteral("downloaded"), true},
+                {QStringLiteral("active"), name == m_llmModelId},
+            });
+        }
+    });
 }
 
 // ─────────────────────────────────────────────

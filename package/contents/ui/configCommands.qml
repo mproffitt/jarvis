@@ -6,6 +6,7 @@ import org.kde.plasma.jarvis 1.0
 
 Item {
     id: commandsRootItem
+    property string title: i18n("Commands")
     width: parent ? parent.width : 0
     height: parent ? parent.height : 0
 
