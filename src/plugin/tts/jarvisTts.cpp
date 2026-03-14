@@ -25,6 +25,7 @@ JarvisTts::~JarvisTts()
 void JarvisTts::initTts()
 {
     const QStringList piperPaths = {
+        QDir::homePath() + QStringLiteral("/.local/bin/piper"),
         QStringLiteral("/usr/lib/piper-tts/bin/piper"),
         QStringLiteral("/usr/bin/piper"),
         QStringLiteral("/usr/local/bin/piper"),

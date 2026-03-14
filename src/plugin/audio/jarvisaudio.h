@@ -10,6 +10,7 @@
 #include <QByteArray>
 #include <atomic>
 #include <vector>
+#include <thread>
 
 #include <whisper.h>
 

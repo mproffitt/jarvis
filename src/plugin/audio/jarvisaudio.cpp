@@ -7,6 +7,7 @@
 #include <QRegularExpression>
 #include <QtConcurrent>
 #include <QtMath>
+#include <thread>
 #include <QDebug>
 
 JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
@@ -18,7 +19,8 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
     initAudioCapture();
     initWhisper();
 
-    m_audioProcessTimer->setInterval(m_settings->wakeBufferSeconds() * 1000);
+    // Check for wake word every second, even though the buffer holds wakeBufferSeconds of audio
+    m_audioProcessTimer->setInterval(1000);
     connect(m_audioProcessTimer, &QTimer::timeout, this, &JarvisAudio::processAudioBuffer);
 
     m_voiceCmdTimer->setSingleShot(true);
@@ -160,20 +162,25 @@ void JarvisAudio::processAudioBuffer()
     QByteArray bufferCopy;
     {
         QMutexLocker lock(&m_audioMutex);
-        const int wakeBufferSize = JARVIS_SAMPLE_RATE * 2 * m_settings->wakeBufferSeconds();
+        // Use 1.5 seconds of audio — enough for a wake word, fast to process
+        const int wakeBufferSize = JARVIS_SAMPLE_RATE * 3; // 1.5s * 2 bytes/sample
         if (m_audioBuffer.size() < wakeBufferSize) return;
         bufferCopy = m_audioBuffer.right(wakeBufferSize);
-        m_audioBuffer.clear();
+        // Keep half the buffer for overlap — prevents missing wake words at boundaries
+        const int keepSize = wakeBufferSize / 2;
+        if (m_audioBuffer.size() > keepSize)
+            m_audioBuffer = m_audioBuffer.right(keepSize);
     }
 
     const auto *samples = reinterpret_cast<const int16_t*>(bufferCopy.constData());
     const int numSamples = bufferCopy.size() / static_cast<int>(sizeof(int16_t));
-    double maxAmp = 0;
+    double sumSquares = 0.0;
     for (int i = 0; i < numSamples; ++i) {
-        double a = qAbs(static_cast<double>(samples[i]));
-        if (a > maxAmp) maxAmp = a;
+        const double s = static_cast<double>(samples[i]);
+        sumSquares += s * s;
     }
-    if (maxAmp < 100) return;
+    const double rms = qSqrt(sumSquares / numSamples);
+    if (rms < 1500) return;
 
     m_whisperBusy = true;
     [[maybe_unused]] auto f = QtConcurrent::run([this, bufferCopy]() {
@@ -206,8 +213,9 @@ bool JarvisAudio::detectWakeWord(const QByteArray &audioData)
     params.single_segment   = true;
     params.no_context       = true;
     params.language         = "en";
-    params.n_threads        = 2;
-    params.audio_ctx        = 512;
+    params.n_threads        = std::min(4, static_cast<int>(std::thread::hardware_concurrency()));
+    params.audio_ctx        = 768; // ~1.5s context, enough for a wake word
+    params.suppress_nst     = true;
 
     const int ret = whisper_full(m_whisperCtx, params,
                                  floatSamples.data(),
@@ -228,7 +236,11 @@ bool JarvisAudio::detectWakeWord(const QByteArray &audioData)
         if (transcript.contains(QStringLiteral("jarvis")) ||
             transcript.contains(QStringLiteral("jarves")) ||
             transcript.contains(QStringLiteral("jarvas")) ||
-            transcript.contains(QStringLiteral("j.a.r.v.i.s"))) {
+            transcript.contains(QStringLiteral("j.a.r.v.i.s")) ||
+            transcript.contains(QStringLiteral("jarvi")) ||
+            transcript.contains(QStringLiteral("jarvus")) ||
+            transcript.contains(QStringLiteral("jarv")) ||
+            transcript.contains(QStringLiteral("jervis"))) {
             return true;
         }
     }
@@ -409,9 +421,10 @@ void JarvisAudio::toggleWakeWord()
     }
 }
 
-void JarvisAudio::updateWakeBufferInterval(int seconds)
+void JarvisAudio::updateWakeBufferInterval(int /* seconds */)
 {
-    m_audioProcessTimer->setInterval(seconds * 1000);
+    // Check interval stays at 1s for responsiveness; buffer size uses wakeBufferSeconds
+    m_audioProcessTimer->setInterval(1000);
 }
 
 void JarvisAudio::updateVoiceCmdTimeout(int seconds)
