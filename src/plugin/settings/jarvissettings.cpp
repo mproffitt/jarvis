@@ -222,11 +222,14 @@ void JarvisSettings::setLlmServerUrl(const QString &url)
 void JarvisSettings::setLlmProvider(const QString &provider)
 {
     if (m_llmProvider != provider) {
+        // Save current model for the old provider
+        if (!m_llmModelId.isEmpty())
+            m_settings.setValue(QStringLiteral("llm/modelId/%1").arg(m_llmProvider), m_llmModelId);
         m_llmProvider = provider;
         // Update URL to the default for this provider
         m_llmServerUrl = defaultUrlForProvider(provider);
-        // Clear model ID — each provider has different models
-        m_llmModelId.clear();
+        // Restore saved model for the new provider
+        m_llmModelId = m_settings.value(QStringLiteral("llm/modelId/%1").arg(provider)).toString();
         saveSettings();
         emit llmProviderChanged();
         emit llmServerUrlChanged();
@@ -356,6 +359,8 @@ void JarvisSettings::setLlmModelId(const QString &modelId)
 {
     if (m_llmModelId != modelId) {
         m_llmModelId = modelId;
+        // Save per-provider so switching back restores it
+        m_settings.setValue(QStringLiteral("llm/modelId/%1").arg(m_llmProvider), modelId);
         saveSettings();
         emit llmModelIdChanged();
     }
