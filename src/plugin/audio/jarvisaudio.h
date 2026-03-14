@@ -88,6 +88,8 @@ private:
     QTimer *m_audioProcessTimer{nullptr};
     QTimer *m_voiceCmdTimer{nullptr};
     QTimer *m_silenceTimer{nullptr};
+    QTimer *m_vadCheckTimer{nullptr};
+    QByteArray m_vadBuffer; // Small rolling buffer for fast VAD checks
     QByteArray m_audioBuffer;
     QMutex m_audioMutex;
 

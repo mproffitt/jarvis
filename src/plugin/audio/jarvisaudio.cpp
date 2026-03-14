@@ -23,9 +23,35 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
     m_downloadManager = new QNetworkAccessManager(this);
     ensureModelsDownloaded();
 
-    // Check for wake word every second, even though the buffer holds wakeBufferSeconds of audio
-    m_audioProcessTimer->setInterval(1000);
+    // Fallback wake word check every 1.5s
+    m_audioProcessTimer->setInterval(1500);
     connect(m_audioProcessTimer, &QTimer::timeout, this, &JarvisAudio::processAudioBuffer);
+
+    // Fast VAD pre-screen every 200ms — triggers immediate whisper when speech detected
+    m_vadCheckTimer = new QTimer(this);
+    m_vadCheckTimer->setInterval(200);
+    connect(m_vadCheckTimer, &QTimer::timeout, this, [this]() {
+        if (!m_vadCtx || !m_wakeWordActive || m_voiceCommandMode || m_whisperBusy.load()) return;
+        if (m_micMonitor && m_micMonitor->isMicBusy()) return;
+
+        // Check the latest audio for speech
+        QByteArray chunk;
+        {
+            QMutexLocker lock(&m_audioMutex);
+            // Need at least 0.5s of audio for VAD
+            const int minSize = JARVIS_SAMPLE_RATE; // 0.5s * 2 bytes/sample
+            if (m_audioBuffer.size() < minSize) return;
+            chunk = m_audioBuffer.right(minSize);
+        }
+
+        const auto floats = pcm16ToFloat(chunk);
+        if (whisper_vad_detect_speech(m_vadCtx, floats.data(), static_cast<int>(floats.size()))) {
+            // Speech detected — trigger wake word processing immediately
+            m_audioProcessTimer->stop();
+            processAudioBuffer();
+            m_audioProcessTimer->start();
+        }
+    });
 
     m_voiceCmdTimer->setSingleShot(true);
     m_voiceCmdTimer->setInterval(m_settings->voiceCmdMaxSeconds() * 1000);
@@ -161,6 +187,7 @@ void JarvisAudio::startListening()
             emit audioLevelChanged();
         });
         m_audioProcessTimer->start();
+        if (m_vadCtx) m_vadCheckTimer->start();
         qDebug() << "[JARVIS] Listening started, audio process timer active";
     } else {
         qWarning() << "[JARVIS] Failed to start audio device";
@@ -176,6 +203,7 @@ void JarvisAudio::stopListening()
         m_audioSource->stop();
     }
     m_audioProcessTimer->stop();
+    m_vadCheckTimer->stop();
     m_audioDevice = nullptr;
     {
         QMutexLocker lock(&m_audioMutex);
@@ -223,8 +251,8 @@ void JarvisAudio::processAudioBuffer()
     QByteArray bufferCopy;
     {
         QMutexLocker lock(&m_audioMutex);
-        // Use 1.5 seconds of audio — enough for a wake word, fast to process
-        const int wakeBufferSize = JARVIS_SAMPLE_RATE * 3; // 1.5s * 2 bytes/sample
+        // Use 1 second of audio — enough for a wake word, minimal for fast processing
+        const int wakeBufferSize = JARVIS_SAMPLE_RATE * 2; // 1s * 2 bytes/sample
         if (m_audioBuffer.size() < wakeBufferSize) return;
         bufferCopy = m_audioBuffer.right(wakeBufferSize);
         // Keep half the buffer for overlap — prevents missing wake words at boundaries
@@ -233,9 +261,8 @@ void JarvisAudio::processAudioBuffer()
             m_audioBuffer = m_audioBuffer.right(keepSize);
     }
 
-    // Denoise before speech detection for cleaner VAD/whisper input
-    const QByteArray cleanAudio = (m_rnnoise && m_settings->noiseSuppressionEnabled()) ? denoiseAudio(bufferCopy) : bufferCopy;
-    const auto floatBuf = pcm16ToFloat(cleanAudio);
+    // Skip denoising for wake word — it adds latency and VAD handles noise filtering
+    const auto floatBuf = pcm16ToFloat(bufferCopy);
     if (m_vadCtx) {
         if (!whisper_vad_detect_speech(m_vadCtx, floatBuf.data(), static_cast<int>(floatBuf.size())))
             return;
@@ -248,8 +275,8 @@ void JarvisAudio::processAudioBuffer()
     }
 
     m_whisperBusy = true;
-    [[maybe_unused]] auto f = QtConcurrent::run([this, cleanAudio]() {
-        const QString matched = detectWakeWord(cleanAudio);
+    [[maybe_unused]] auto f = QtConcurrent::run([this, bufferCopy]() {
+        const QString matched = detectWakeWord(bufferCopy);
         m_whisperBusy = false;
 
         if (!matched.isEmpty()) {
@@ -280,7 +307,7 @@ QString JarvisAudio::detectWakeWord(const QByteArray &audioData)
     params.no_context       = true;
     params.language         = "en";
     params.n_threads        = std::min(4, static_cast<int>(std::thread::hardware_concurrency()));
-    params.audio_ctx        = 768; // ~1.5s context, enough for a wake word
+    params.audio_ctx        = 512; // ~1s context, minimal for fast wake word detection
     params.suppress_nst     = true;
 
     const int ret = whisper_full(m_whisperCtx, params,
