@@ -66,6 +66,7 @@ Item {
                 model: [
                     { value: "llamacpp", text: "llama.cpp (local)" },
                     { value: "ollama",   text: "Ollama (local)" },
+                    { value: "openai",   text: "OpenAI (ChatGPT)" },
                     { value: "gemini",   text: "Google Gemini" },
                     { value: "claude",   text: "Anthropic (Claude)" }
                 ]
@@ -90,6 +91,7 @@ Item {
                     placeholderText: {
                         var p = JarvisBackend.llmProvider
                         if (p === "ollama") return "http://127.0.0.1:11434"
+                        if (p === "openai") return "https://api.openai.com"
                         if (p === "gemini") return "https://generativelanguage.googleapis.com/v1beta/openai"
                         if (p === "claude") return "https://api.anthropic.com"
                         return "http://127.0.0.1:8080"
