@@ -227,29 +227,21 @@ void JarvisTts::processNextSentence()
         return;
     }
 
-    // Synthesize this sentence to a temp wav, then play it
-    const QString wavPath = QDir::tempPath() +
-        QStringLiteral("/jarvis_tts_%1.wav").arg(QDateTime::currentMSecsSinceEpoch());
-
+    // Stream directly: piper --output_raw | pw-cat --playback (no temp files)
     const double lengthScale = 1.0 - (m_settings->ttsRate() * 0.5);
 
     const QString quotedText = QStringLiteral("'") +
         QString(sentence).replace(QStringLiteral("'"), QStringLiteral("'\\''")) +
         QStringLiteral("'");
 
-    // Synthesize: pipe text to piper, output wav
     QString cmd;
     cmd += QStringLiteral("printf '%s' ") + quotedText;
     cmd += QStringLiteral(" | '") + m_piperBin + QStringLiteral("'");
     cmd += QStringLiteral(" -m '") + m_settings->piperModelPath() + QStringLiteral("'");
-    cmd += QStringLiteral(" -f '") + wavPath + QStringLiteral("'");
+    cmd += QStringLiteral(" --output_raw -q");
     cmd += QStringLiteral(" --length-scale ") + QString::number(lengthScale, 'f', 2);
     cmd += QStringLiteral(" --sentence-silence 0.2");
-    cmd += QStringLiteral(" 2>/dev/null");
-
-    // Use a single shell process: synthesize then play then cleanup, then signal done
-    cmd += QStringLiteral(" && pw-play '") + wavPath + QStringLiteral("' 2>/dev/null");
-    cmd += QStringLiteral("; rm -f '") + wavPath + QStringLiteral("'");
+    cmd += QStringLiteral(" | pw-cat --playback --raw --rate=22050 --channels=1 --format=s16 --quality=10 -");
 
     auto *proc = new QProcess(this);
     connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),

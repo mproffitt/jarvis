@@ -488,13 +488,21 @@ void JarvisBackend::trySpeakCompleteSentences()
     // Get the displayable text so far (without action blocks)
     const QString displayText = stripActionsFromResponse(m_fullStreamedResponse);
 
-    // Find complete sentences that we haven't spoken yet
+    // Speak on sentence-ending punctuation, commas, or dashes — for lower latency
+    // First try sentence boundaries, then fall back to clause boundaries if we have enough text
     static const QRegularExpression sentenceEndRe(QStringLiteral("[.!?;:]\\s"));
+    static const QRegularExpression clauseEndRe(QStringLiteral("[,\\-—]\\s"));
+
     const int searchStart = m_spokenSoFar.length();
     if (searchStart >= displayText.length()) return;
 
     const QString unspoken = displayText.mid(searchStart);
-    const auto match = sentenceEndRe.match(unspoken);
+
+    auto match = sentenceEndRe.match(unspoken);
+    if (!match.hasMatch() && unspoken.length() > 40) {
+        // No complete sentence yet but enough text — try speaking at clause boundaries
+        match = clauseEndRe.match(unspoken);
+    }
 
     if (match.hasMatch()) {
         // We have at least one complete sentence
