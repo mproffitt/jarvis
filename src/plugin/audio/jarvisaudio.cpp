@@ -368,22 +368,24 @@ void JarvisAudio::initWhisper()
 
 QString JarvisAudio::findWhisperModel() const
 {
-    const QStringList searchPaths = {
-        QDir::homePath() + QStringLiteral("/.local/share/jarvis/ggml-tiny.bin"),
-        QDir::homePath() + QStringLiteral("/.local/share/jarvis/ggml-tiny.en.bin"),
-        QStringLiteral("/usr/share/jarvis/ggml-tiny.bin"),
-        QStringLiteral("/usr/share/jarvis/ggml-tiny.en.bin"),
-        QStringLiteral("/usr/local/share/jarvis/ggml-tiny.bin"),
-        QStringLiteral("/usr/local/share/jarvis/ggml-tiny.en.bin"),
-        QDir::homePath() + QStringLiteral("/.local/share/whisper/ggml-tiny.bin"),
-        QDir::homePath() + QStringLiteral("/.local/share/whisper/ggml-tiny.en.bin"),
-        QStringLiteral("/usr/share/whisper/ggml-tiny.bin"),
-        QStringLiteral("/usr/share/whisper/ggml-tiny.en.bin"),
+    // Search for the configured model size first, then fall back to smaller models
+    const QString preferred = m_settings->whisperModel(); // "tiny", "base", "small"
+    const QStringList sizes = {preferred, QStringLiteral("tiny"), QStringLiteral("base"), QStringLiteral("small")};
+    const QStringList dirs = {
+        QDir::homePath() + QStringLiteral("/.local/share/jarvis/"),
+        QStringLiteral("/usr/share/jarvis/"),
+        QStringLiteral("/usr/local/share/jarvis/"),
+        QDir::homePath() + QStringLiteral("/.local/share/whisper/"),
+        QStringLiteral("/usr/share/whisper/"),
     };
 
-    for (const auto &path : searchPaths) {
-        if (QFileInfo::exists(path)) {
-            return path;
+    for (const auto &size : sizes) {
+        for (const auto &dir : dirs) {
+            // Try multilingual first, then english-only
+            const QString multi = dir + QStringLiteral("ggml-%1.bin").arg(size);
+            if (QFileInfo::exists(multi)) return multi;
+            const QString en = dir + QStringLiteral("ggml-%1.en.bin").arg(size);
+            if (QFileInfo::exists(en)) return en;
         }
     }
     return {};

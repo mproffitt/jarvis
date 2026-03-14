@@ -687,6 +687,32 @@ Item {
                 }
             }
 
+            ComboBox {
+                Kirigami.FormData.label: i18n("Whisper model:")
+                model: [
+                    { value: "tiny",  text: "Tiny (75MB — fastest, least accurate)" },
+                    { value: "base",  text: "Base (142MB — good balance)" },
+                    { value: "small", text: "Small (466MB — best accuracy)" }
+                ]
+                textRole: "text"
+                valueRole: "value"
+                currentIndex: {
+                    var m = JarvisBackend.whisperModel
+                    for (var i = 0; i < model.length; i++)
+                        if (model[i].value === m) return i
+                    return 0
+                }
+                onActivated: JarvisBackend.setWhisperModel(currentValue)
+            }
+
+            Label {
+                text: i18n("Requires restart. Download models from huggingface.co/ggerganov/whisper.cpp and place in ~/.local/share/jarvis/")
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+                color: Kirigami.Theme.disabledTextColor
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+            }
+
             CheckBox {
                 Kirigami.FormData.label: i18n("Auto-start wake word detection:")
                 checked: JarvisBackend.autoStartWakeWord

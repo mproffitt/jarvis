@@ -155,6 +155,7 @@ void JarvisBackend::connectModuleSignals()
         emit silenceTimeoutMsChanged();
     });
     connect(m_settings, &JarvisSettings::autoStartWakeWordChanged, this, &JarvisBackend::autoStartWakeWordChanged);
+    connect(m_settings, &JarvisSettings::whisperModelChanged, this, &JarvisBackend::whisperModelChanged);
     connect(m_settings, &JarvisSettings::wakeWordChanged, this, &JarvisBackend::wakeWordChanged);
     connect(m_settings, &JarvisSettings::personalityPromptChanged, this, &JarvisBackend::personalityPromptChanged);
     connect(m_settings, &JarvisSettings::ttsRateChanged, this, [this]() { m_tts->onTtsRateChanged(); });
@@ -240,6 +241,7 @@ int JarvisBackend::wakeBufferSeconds() const { return m_settings->wakeBufferSeco
 int JarvisBackend::voiceCmdMaxSeconds() const { return m_settings->voiceCmdMaxSeconds(); }
 int JarvisBackend::silenceTimeoutMs() const { return m_settings->silenceTimeoutMs(); }
 bool JarvisBackend::autoStartWakeWord() const { return m_settings->autoStartWakeWord(); }
+QString JarvisBackend::whisperModel() const { return m_settings->whisperModel(); }
 QString JarvisBackend::wakeWord() const { return m_settings->wakeWord(); }
 QString JarvisBackend::personalityPrompt() const { return m_settings->personalityPrompt(); }
 
@@ -285,6 +287,7 @@ void JarvisBackend::setWakeBufferSeconds(int seconds) { m_settings->setWakeBuffe
 void JarvisBackend::setVoiceCmdMaxSeconds(int seconds) { m_settings->setVoiceCmdMaxSeconds(seconds); }
 void JarvisBackend::setSilenceTimeoutMs(int ms) { m_settings->setSilenceTimeoutMs(ms); }
 void JarvisBackend::setAutoStartWakeWord(bool enabled) { m_settings->setAutoStartWakeWord(enabled); }
+void JarvisBackend::setWhisperModel(const QString &model) { m_settings->setWhisperModel(model); }
 void JarvisBackend::setWakeWord(const QString &word) { m_settings->setWakeWord(word); }
 
 void JarvisBackend::setContinuousMode(bool enabled)
