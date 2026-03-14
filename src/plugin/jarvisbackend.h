@@ -77,6 +77,7 @@ class JarvisBackend : public QObject
     Q_PROPERTY(int wakeBufferSeconds READ wakeBufferSeconds NOTIFY wakeBufferSecondsChanged)
     Q_PROPERTY(int voiceCmdMaxSeconds READ voiceCmdMaxSeconds NOTIFY voiceCmdMaxSecondsChanged)
     Q_PROPERTY(bool autoStartWakeWord READ autoStartWakeWord NOTIFY autoStartWakeWordChanged)
+    Q_PROPERTY(QString wakeWord READ wakeWord NOTIFY wakeWordChanged)
     Q_PROPERTY(QString personalityPrompt READ personalityPrompt NOTIFY personalityPromptChanged)
 
     // Commands
@@ -141,6 +142,7 @@ public:
     [[nodiscard]] int wakeBufferSeconds() const;
     [[nodiscard]] int voiceCmdMaxSeconds() const;
     [[nodiscard]] bool autoStartWakeWord() const;
+    [[nodiscard]] QString wakeWord() const;
     [[nodiscard]] QString personalityPrompt() const;
 
     // Continuous conversation
@@ -186,6 +188,7 @@ public:
     Q_INVOKABLE void setWakeBufferSeconds(int seconds);
     Q_INVOKABLE void setVoiceCmdMaxSeconds(int seconds);
     Q_INVOKABLE void setAutoStartWakeWord(bool enabled);
+    Q_INVOKABLE void setWakeWord(const QString &word);
     Q_INVOKABLE void setContinuousMode(bool enabled);
     Q_INVOKABLE void stopConversation();
     Q_INVOKABLE void setPersonalityPrompt(const QString &prompt);
@@ -234,6 +237,7 @@ signals:
     void wakeBufferSecondsChanged();
     void voiceCmdMaxSecondsChanged();
     void autoStartWakeWordChanged();
+    void wakeWordChanged();
     void personalityPromptChanged();
     void continuousModeChanged();
     void conversationActiveChanged();

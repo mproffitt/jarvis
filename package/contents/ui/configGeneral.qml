@@ -481,6 +481,23 @@ Item {
                 Kirigami.FormData.label: i18n("Wake Word & Audio")
             }
 
+            RowLayout {
+                Kirigami.FormData.label: i18n("Wake word:")
+                spacing: Kirigami.Units.smallSpacing
+                TextField {
+                    id: wakeWordField
+                    text: JarvisBackend.wakeWord
+                    placeholderText: i18n("jarvis")
+                    Layout.fillWidth: true
+                    onAccepted: JarvisBackend.setWakeWord(text)
+                }
+                Button {
+                    text: i18n("Apply")
+                    icon.name: "dialog-ok-apply"
+                    onClicked: JarvisBackend.setWakeWord(wakeWordField.text)
+                }
+            }
+
             CheckBox {
                 Kirigami.FormData.label: i18n("Auto-start wake word detection:")
                 checked: JarvisBackend.autoStartWakeWord
@@ -503,7 +520,7 @@ Item {
             }
 
             Label {
-                text: i18n("Say \"Jarvis\" to activate voice commands without clicking.")
+                text: i18n("Say the wake word to activate voice commands without clicking.")
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
                 color: Kirigami.Theme.disabledTextColor

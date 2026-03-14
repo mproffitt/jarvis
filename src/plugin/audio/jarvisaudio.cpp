@@ -262,15 +262,15 @@ bool JarvisAudio::detectWakeWord(const QByteArray &audioData)
         QString transcript = QString::fromUtf8(text).toLower().trimmed();
         qDebug() << "[JARVIS] Whisper heard:" << transcript;
 
-        if (transcript.contains(QStringLiteral("jarvis")) ||
-            transcript.contains(QStringLiteral("jarves")) ||
-            transcript.contains(QStringLiteral("jarvas")) ||
-            transcript.contains(QStringLiteral("j.a.r.v.i.s")) ||
-            transcript.contains(QStringLiteral("jarvi")) ||
-            transcript.contains(QStringLiteral("jarvus")) ||
-            transcript.contains(QStringLiteral("jarv")) ||
-            transcript.contains(QStringLiteral("jervis"))) {
+        const QString wakeWord = m_settings->wakeWord().toLower();
+        // Check for the wake word and common misheard variants
+        if (transcript.contains(wakeWord)) {
             return true;
+        }
+        // Generate fuzzy variants: drop last char, swap vowels
+        if (wakeWord.length() >= 3) {
+            const QString prefix = wakeWord.left(wakeWord.length() - 1);
+            if (transcript.contains(prefix)) return true;
         }
     }
 

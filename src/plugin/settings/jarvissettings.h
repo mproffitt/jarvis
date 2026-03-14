@@ -30,6 +30,7 @@ public:
     [[nodiscard]] int wakeBufferSeconds() const { return m_wakeBufferSeconds; }
     [[nodiscard]] int voiceCmdMaxSeconds() const { return m_voiceCmdMaxSeconds; }
     [[nodiscard]] bool autoStartWakeWord() const { return m_autoStartWakeWord; }
+    [[nodiscard]] QString wakeWord() const { return m_wakeWord; }
     [[nodiscard]] bool continuousMode() const { return m_continuousMode; }
     [[nodiscard]] QString personalityPrompt() const { return m_personalityPrompt; }
     [[nodiscard]] double ttsRate() const { return m_ttsRate; }
@@ -46,6 +47,7 @@ public:
     void setWakeBufferSeconds(int seconds);
     void setVoiceCmdMaxSeconds(int seconds);
     void setAutoStartWakeWord(bool enabled);
+    void setWakeWord(const QString &word);
     void setContinuousMode(bool enabled);
     void setPersonalityPrompt(const QString &prompt);
     void setTtsRate(double rate);
@@ -89,6 +91,7 @@ signals:
     void wakeBufferSecondsChanged();
     void voiceCmdMaxSecondsChanged();
     void autoStartWakeWordChanged();
+    void wakeWordChanged();
     void continuousModeChanged();
     void personalityPromptChanged();
     void ttsRateChanged();
@@ -120,6 +123,7 @@ private:
     int m_wakeBufferSeconds{2};
     int m_voiceCmdMaxSeconds{8};
     bool m_autoStartWakeWord{true};
+    QString m_wakeWord;
     bool m_continuousMode{false};
     QString m_personalityPrompt;
     double m_ttsRate{0.05};

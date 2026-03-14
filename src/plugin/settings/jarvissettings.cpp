@@ -54,6 +54,7 @@ void JarvisSettings::loadSettings()
     m_wakeBufferSeconds = m_settings.value(QStringLiteral("audio/wakeBufferSeconds"), 2).toInt();
     m_voiceCmdMaxSeconds = m_settings.value(QStringLiteral("audio/voiceCmdMaxSeconds"), 8).toInt();
     m_autoStartWakeWord = m_settings.value(QStringLiteral("audio/autoStartWakeWord"), true).toBool();
+    m_wakeWord = m_settings.value(QStringLiteral("audio/wakeWord"), QStringLiteral("jarvis")).toString();
     m_continuousMode = m_settings.value(QStringLiteral("audio/continuousMode"), false).toBool();
     m_ttsRate = m_settings.value(QStringLiteral("tts/rate"), 0.05).toDouble();
     m_ttsPitch = m_settings.value(QStringLiteral("tts/pitch"), -0.1).toDouble();
@@ -89,6 +90,7 @@ void JarvisSettings::saveSettings()
     m_settings.setValue(QStringLiteral("audio/wakeBufferSeconds"), m_wakeBufferSeconds);
     m_settings.setValue(QStringLiteral("audio/voiceCmdMaxSeconds"), m_voiceCmdMaxSeconds);
     m_settings.setValue(QStringLiteral("audio/autoStartWakeWord"), m_autoStartWakeWord);
+    m_settings.setValue(QStringLiteral("audio/wakeWord"), m_wakeWord);
     m_settings.setValue(QStringLiteral("audio/continuousMode"), m_continuousMode);
     m_settings.setValue(QStringLiteral("tts/rate"), m_ttsRate);
     m_settings.setValue(QStringLiteral("tts/pitch"), m_ttsPitch);
@@ -188,6 +190,16 @@ void JarvisSettings::setAutoStartWakeWord(bool enabled)
         m_autoStartWakeWord = enabled;
         saveSettings();
         emit autoStartWakeWordChanged();
+    }
+}
+
+void JarvisSettings::setWakeWord(const QString &word)
+{
+    const QString cleaned = word.toLower().trimmed();
+    if (m_wakeWord != cleaned) {
+        m_wakeWord = cleaned;
+        saveSettings();
+        emit wakeWordChanged();
     }
 }
 

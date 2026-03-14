@@ -139,6 +139,7 @@ void JarvisBackend::connectModuleSignals()
         emit voiceCmdMaxSecondsChanged();
     });
     connect(m_settings, &JarvisSettings::autoStartWakeWordChanged, this, &JarvisBackend::autoStartWakeWordChanged);
+    connect(m_settings, &JarvisSettings::wakeWordChanged, this, &JarvisBackend::wakeWordChanged);
     connect(m_settings, &JarvisSettings::personalityPromptChanged, this, &JarvisBackend::personalityPromptChanged);
     connect(m_settings, &JarvisSettings::ttsRateChanged, this, [this]() { m_tts->onTtsRateChanged(); });
     connect(m_settings, &JarvisSettings::ttsPitchChanged, this, [this]() { m_tts->onTtsPitchChanged(); });
@@ -198,6 +199,7 @@ int JarvisBackend::maxHistoryPairs() const { return m_settings->maxHistoryPairs(
 int JarvisBackend::wakeBufferSeconds() const { return m_settings->wakeBufferSeconds(); }
 int JarvisBackend::voiceCmdMaxSeconds() const { return m_settings->voiceCmdMaxSeconds(); }
 bool JarvisBackend::autoStartWakeWord() const { return m_settings->autoStartWakeWord(); }
+QString JarvisBackend::wakeWord() const { return m_settings->wakeWord(); }
 QString JarvisBackend::personalityPrompt() const { return m_settings->personalityPrompt(); }
 
 QVariantList JarvisBackend::commandMappings() const { return m_commands->commandMappings(); }
@@ -238,6 +240,7 @@ void JarvisBackend::setMaxHistoryPairs(int pairs) { m_settings->setMaxHistoryPai
 void JarvisBackend::setWakeBufferSeconds(int seconds) { m_settings->setWakeBufferSeconds(seconds); }
 void JarvisBackend::setVoiceCmdMaxSeconds(int seconds) { m_settings->setVoiceCmdMaxSeconds(seconds); }
 void JarvisBackend::setAutoStartWakeWord(bool enabled) { m_settings->setAutoStartWakeWord(enabled); }
+void JarvisBackend::setWakeWord(const QString &word) { m_settings->setWakeWord(word); }
 
 void JarvisBackend::setContinuousMode(bool enabled)
 {
@@ -373,9 +376,11 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
     }
 
     // Remove wake word from transcription if present
+    const QString wakeWord = m_settings->wakeWord();
     QString command = text;
-    command.remove(QRegularExpression(QStringLiteral("^\\s*jarvis[,\\s]*"),
-                                      QRegularExpression::CaseInsensitiveOption));
+    command.remove(QRegularExpression(
+        QStringLiteral("^\\s*%1[,\\s]*").arg(QRegularExpression::escape(wakeWord)),
+        QRegularExpression::CaseInsensitiveOption));
     command = command.trimmed();
 
     if (command.isEmpty()) {
