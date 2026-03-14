@@ -18,16 +18,21 @@ depends=(
     'kwallet'
     'whisper.cpp'
     'pipewire'
+    'rnnoise'
 )
 makedepends=(
     'cmake>=3.25'
     'extra-cmake-modules>=6.0'
     'gcc>=13'
+    'pipewire'
+    'rnnoise'
 )
 optdepends=(
     'piper-tts: high-quality offline text-to-speech'
     'xdotool: keyboard simulation for type_text action'
     'llama.cpp: local LLM server for AI chat'
+    'ollama: local LLM server with model management'
+    'playerctl: media playback control via voice commands'
 )
 source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/v${pkgver}.tar.gz")
 sha256sums=('SKIP')

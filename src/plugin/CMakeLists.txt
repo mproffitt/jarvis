@@ -15,6 +15,7 @@ add_library(jarvis_plugin SHARED ${jarvis_plugin_SRCS})
 target_include_directories(jarvis_plugin PRIVATE
     ${WHISPER_INCLUDE_DIRS}
     ${PIPEWIRE_INCLUDE_DIRS}
+    ${RNNOISE_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
@@ -30,6 +31,7 @@ target_link_libraries(jarvis_plugin
     KF6::Wallet
     ${WHISPER_LIBRARIES}
     ${PIPEWIRE_LIBRARIES}
+    ${RNNOISE_LIBRARIES}
 )
 
 target_compile_features(jarvis_plugin PUBLIC cxx_std_23)

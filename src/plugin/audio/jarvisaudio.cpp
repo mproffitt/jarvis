@@ -19,6 +19,7 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
     , m_silenceTimer(new QTimer(this))
 {
     initAudioCapture();
+    initRnnoise();
     m_downloadManager = new QNetworkAccessManager(this);
     ensureModelsDownloaded();
 
@@ -69,6 +70,10 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
 JarvisAudio::~JarvisAudio()
 {
     stopListening();
+    if (m_rnnoise) {
+        rnnoise_destroy(m_rnnoise);
+        m_rnnoise = nullptr;
+    }
     if (m_vadCtx) {
         whisper_vad_free(m_vadCtx);
         m_vadCtx = nullptr;
@@ -223,8 +228,9 @@ void JarvisAudio::processAudioBuffer()
             m_audioBuffer = m_audioBuffer.right(keepSize);
     }
 
-    // Use VAD to check if there's speech, fall back to RMS energy threshold
-    const auto floatBuf = pcm16ToFloat(bufferCopy);
+    // Denoise before speech detection for cleaner VAD/whisper input
+    const QByteArray cleanAudio = m_rnnoise ? denoiseAudio(bufferCopy) : bufferCopy;
+    const auto floatBuf = pcm16ToFloat(cleanAudio);
     if (m_vadCtx) {
         if (!whisper_vad_detect_speech(m_vadCtx, floatBuf.data(), static_cast<int>(floatBuf.size())))
             return;
@@ -237,8 +243,8 @@ void JarvisAudio::processAudioBuffer()
     }
 
     m_whisperBusy = true;
-    [[maybe_unused]] auto f = QtConcurrent::run([this, bufferCopy]() {
-        const bool detected = detectWakeWord(bufferCopy);
+    [[maybe_unused]] auto f = QtConcurrent::run([this, cleanAudio]() {
+        const bool detected = detectWakeWord(cleanAudio);
         m_whisperBusy = false;
 
         if (detected) {
@@ -440,6 +446,67 @@ QString JarvisAudio::findVadModel() const
     return {};
 }
 
+void JarvisAudio::initRnnoise()
+{
+    m_rnnoise = rnnoise_create(nullptr);
+    if (m_rnnoise) {
+        qDebug() << "[JARVIS] RNNoise initialized (frame size:" << rnnoise_get_frame_size() << ")";
+    } else {
+        qWarning() << "[JARVIS] Failed to initialize RNNoise";
+    }
+}
+
+QByteArray JarvisAudio::denoiseAudio(const QByteArray &pcm16) const
+{
+    if (!m_rnnoise) return pcm16;
+
+    // RNNoise expects 480-sample frames at 48kHz (float).
+    // Our audio is 16kHz PCM16. We upsample 3x, denoise, downsample.
+    constexpr int RNNOISE_FRAME = 480;
+    constexpr int INPUT_FRAME = RNNOISE_FRAME / 3; // 160 samples at 16kHz = 10ms
+
+    const auto *in = reinterpret_cast<const int16_t*>(pcm16.constData());
+    const int totalSamples = pcm16.size() / static_cast<int>(sizeof(int16_t));
+
+    QByteArray result;
+    result.reserve(pcm16.size());
+
+    // Process in 160-sample (10ms) chunks
+    for (int offset = 0; offset + INPUT_FRAME <= totalSamples; offset += INPUT_FRAME) {
+        // Upsample 16kHz → 48kHz with linear interpolation
+        // RNNoise expects float samples at int16 scale (±32768)
+        float upsampled[RNNOISE_FRAME];
+        for (int i = 0; i < INPUT_FRAME; ++i) {
+            const float s0 = static_cast<float>(in[offset + i]);
+            const float s1 = (i + 1 < INPUT_FRAME)
+                ? static_cast<float>(in[offset + i + 1]) : s0;
+            upsampled[i * 3]     = s0;
+            upsampled[i * 3 + 1] = s0 + (s1 - s0) * (1.0f / 3.0f);
+            upsampled[i * 3 + 2] = s0 + (s1 - s0) * (2.0f / 3.0f);
+        }
+
+        // Denoise
+        float denoised[RNNOISE_FRAME];
+        rnnoise_process_frame(m_rnnoise, denoised, upsampled);
+
+        // Downsample 48kHz → 16kHz (average 3 samples per output sample)
+        for (int i = 0; i < INPUT_FRAME; ++i) {
+            const float avg = (denoised[i * 3] + denoised[i * 3 + 1] + denoised[i * 3 + 2]) / 3.0f;
+            const auto s = static_cast<int16_t>(qBound(-32768.0f, avg, 32767.0f));
+            result.append(reinterpret_cast<const char*>(&s), 2);
+        }
+    }
+
+    // Append any remaining samples unprocessed
+    const int processed = (totalSamples / INPUT_FRAME) * INPUT_FRAME;
+    if (processed < totalSamples) {
+        result.append(reinterpret_cast<const char*>(in + processed),
+                      (totalSamples - processed) * sizeof(int16_t));
+    }
+
+    return result;
+}
+
 void JarvisAudio::ensureModelsDownloaded()
 {
     const QString dataDir = QDir::homePath() + QStringLiteral("/.local/share/jarvis");
@@ -604,8 +671,11 @@ void JarvisAudio::processVoiceCommand()
         audioData = audioData.right(voiceCmdBufferSize);
     }
 
-    [[maybe_unused]] auto f = QtConcurrent::run([this, audioData]() {
-        const QString text = transcribeAudio(audioData);
+    // Denoise before transcription
+    const QByteArray cleanData = m_rnnoise ? denoiseAudio(audioData) : audioData;
+
+    [[maybe_unused]] auto f = QtConcurrent::run([this, cleanData]() {
+        const QString text = transcribeAudio(cleanData);
 
         QMetaObject::invokeMethod(this, [this, text]() {
             m_lastTranscription = text;

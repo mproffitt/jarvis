@@ -15,6 +15,7 @@
 #include <functional>
 
 #include <whisper.h>
+#include <rnnoise.h>
 
 class JarvisSettings;
 class MicMonitor;
@@ -72,6 +73,8 @@ private:
     void initVad();
     void ensureModelsDownloaded();
     void downloadModel(const QString &url, const QString &destPath, const std::function<void()> &onComplete);
+    void initRnnoise();
+    QByteArray denoiseAudio(const QByteArray &pcm16) const;
 
     static constexpr int JARVIS_SAMPLE_RATE = 16000;
 
@@ -108,4 +111,5 @@ private:
 
     MicMonitor *m_micMonitor{nullptr};
     QNetworkAccessManager *m_downloadManager{nullptr};
+    DenoiseState *m_rnnoise{nullptr};
 };

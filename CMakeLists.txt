@@ -54,6 +54,10 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(PIPEWIRE REQUIRED libpipewire-0.3)
 message(STATUS "Found PipeWire: ${PIPEWIRE_LIBRARIES}")
 
+# RNNoise for noise suppression
+pkg_check_modules(RNNOISE REQUIRED rnnoise)
+message(STATUS "Found RNNoise: ${RNNOISE_LIBRARIES}")
+
 # Install the plasmoid package
 plasma_install_package(package org.kde.plasma.jarvis)
 

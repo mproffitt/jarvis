@@ -22,14 +22,20 @@ BuildRequires:  kf6-plasma-devel
 BuildRequires:  kf6-ki18n-devel
 BuildRequires:  kf6-kconfig-devel
 BuildRequires:  kf6-kwallet-devel
+BuildRequires:  pipewire-devel
+BuildRequires:  rnnoise-devel
+BuildRequires:  whisper-cpp-devel
 Requires:       kf6-kwallet%{?_isa}
 Requires:       kf6-plasma%{?_isa}
 Requires:       qt6-qtbase%{?_isa}
 Requires:       qt6-qtdeclarative%{?_isa}
 Requires:       pipewire
+Requires:       rnnoise
 Recommends:     piper
 Recommends:     xdotool
+Recommends:     playerctl
 Suggests:       llama-cpp
+Suggests:       ollama
 
 %description
 A fully local AI assistant plasmoid for KDE Plasma 6, inspired by
