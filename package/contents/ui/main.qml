@@ -28,6 +28,9 @@ PlasmoidItem {
 
     property int currentTab: 0 // 0=chat, 1=system, 2=settings
 
+    // Hidden helper for clipboard operations
+    TextEdit { id: copyHelper; visible: false }
+
     // ════════════════════════════════════════════
     //  COMPACT REPRESENTATION — Arc Reactor Icon
     // ════════════════════════════════════════════
@@ -423,11 +426,40 @@ PlasmoidItem {
                                             }
                                             Text {
                                                 id: msgTxt
-                                                anchors { fill: parent; margins: 7; leftMargin: 12 }
+                                                anchors { fill: parent; margins: 7; leftMargin: 12; rightMargin: role === "user" ? 7 : 24 }
                                                 text: msg
                                                 color: role === "user" ? "#b0c4d8" : "#d0eaf4"
                                                 font { pixelSize: 11; family: uiFont }
                                                 wrapMode: Text.WordWrap; lineHeight: 1.3
+                                            }
+                                            // Copy button for assistant responses
+                                            MouseArea {
+                                                id: bubbleHover
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                acceptedButtons: Qt.NoButton
+                                            }
+                                            Text {
+                                                visible: role !== "user" && bubbleHover.containsMouse
+                                                text: "📋"
+                                                font.pixelSize: 12
+                                                anchors { right: parent.right; top: parent.top; margins: 4 }
+                                                MouseArea {
+                                                    anchors.fill: parent
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: {
+                                                        copyHelper.text = msg
+                                                        copyHelper.selectAll()
+                                                        copyHelper.copy()
+                                                        parent.text = "✓"
+                                                        copyResetTimer.start()
+                                                    }
+                                                }
+                                                Timer {
+                                                    id: copyResetTimer
+                                                    interval: 1000
+                                                    onTriggered: parent.text = "📋"
+                                                }
                                             }
                                         }
                                     }
