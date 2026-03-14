@@ -48,6 +48,11 @@ set(WHISPER_LIBRARIES ${WHISPER_LIB})
 set(WHISPER_INCLUDE_DIRS ${WHISPER_INC})
 message(STATUS "Found whisper: ${WHISPER_LIB}")
 
+# PipeWire for mic-busy detection
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PIPEWIRE REQUIRED libpipewire-0.3)
+message(STATUS "Found PipeWire: ${PIPEWIRE_LIBRARIES}")
+
 # Install the plasmoid package
 plasma_install_package(package org.kde.plasma.jarvis)
 

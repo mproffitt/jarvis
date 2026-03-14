@@ -14,6 +14,7 @@
 #include <whisper.h>
 
 class JarvisSettings;
+class MicMonitor;
 
 class JarvisAudio : public QObject
 {
@@ -45,6 +46,7 @@ signals:
     void voiceCommandModeChanged();
     void lastTranscriptionChanged();
     void voiceCommandTranscribed(const QString &text);
+    void micBusyChanged(bool busy);
 
 private slots:
     void processAudioBuffer();
@@ -90,4 +92,6 @@ private:
     std::atomic<bool> m_voiceCommandMode{false};
     double m_audioLevel{0.0};
     QString m_lastTranscription;
+
+    MicMonitor *m_micMonitor{nullptr};
 };

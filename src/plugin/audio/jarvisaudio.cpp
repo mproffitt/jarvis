@@ -1,4 +1,5 @@
 #include "jarvisaudio.h"
+#include "micmonitor.h"
 #include "../settings/jarvissettings.h"
 
 #include <QDir>
@@ -48,6 +49,11 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
             }
         }
     });
+
+    // PipeWire mic-busy detection
+    m_micMonitor = new MicMonitor(this);
+    connect(m_micMonitor, &MicMonitor::micBusyChanged, this, &JarvisAudio::micBusyChanged);
+    m_micMonitor->start();
 
     // Auto-start wake word detection
     if (m_settings->autoStartWakeWord() && m_whisperCtx && m_audioSource) {
@@ -177,6 +183,7 @@ void JarvisAudio::stopListening()
 
 void JarvisAudio::processAudioBuffer()
 {
+    if (m_micMonitor && m_micMonitor->isMicBusy()) return;
     if (m_voiceCommandMode) return;
     if (!m_wakeWordActive || !m_whisperCtx) return;
     if (m_whisperBusy.load()) return;
@@ -383,6 +390,7 @@ std::vector<float> JarvisAudio::pcm16ToFloat(const QByteArray &audioData) const
 
 void JarvisAudio::startVoiceCommand()
 {
+    if (m_micMonitor && m_micMonitor->isMicBusy()) return;
     if (!m_whisperCtx || !m_audioSource) return;
 
     m_voiceCommandMode = true;
