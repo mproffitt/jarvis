@@ -105,6 +105,55 @@ void JarvisCommands::populateDefaults()
             {QStringLiteral("type"), QStringLiteral("command")},
             {QStringLiteral("desc"), QStringLiteral("Toggle mute")}
         },
+        // Media controls (MPRIS)
+        QVariantMap{
+            {QStringLiteral("phrase"), QStringLiteral("pause music")},
+            {QStringLiteral("action"), QStringLiteral("playerctl pause 2>/dev/null || dbus-send --type=method_call --dest=$(dbus-send --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>/dev/null | grep -oP '\"org\\.mpris\\.MediaPlayer2\\.[^\"]+\"' | head -1 | tr -d '\"') /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Pause")},
+            {QStringLiteral("type"), QStringLiteral("command")},
+            {QStringLiteral("desc"), QStringLiteral("Pause media playback")}
+        },
+        QVariantMap{
+            {QStringLiteral("phrase"), QStringLiteral("play music")},
+            {QStringLiteral("action"), QStringLiteral("playerctl play 2>/dev/null || dbus-send --type=method_call --dest=$(dbus-send --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>/dev/null | grep -oP '\"org\\.mpris\\.MediaPlayer2\\.[^\"]+\"' | head -1 | tr -d '\"') /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Play")},
+            {QStringLiteral("type"), QStringLiteral("command")},
+            {QStringLiteral("desc"), QStringLiteral("Resume media playback")}
+        },
+        QVariantMap{
+            {QStringLiteral("phrase"), QStringLiteral("resume music")},
+            {QStringLiteral("action"), QStringLiteral("playerctl play 2>/dev/null || dbus-send --type=method_call --dest=$(dbus-send --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>/dev/null | grep -oP '\"org\\.mpris\\.MediaPlayer2\\.[^\"]+\"' | head -1 | tr -d '\"') /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Play")},
+            {QStringLiteral("type"), QStringLiteral("command")},
+            {QStringLiteral("desc"), QStringLiteral("Resume media playback")}
+        },
+        QVariantMap{
+            {QStringLiteral("phrase"), QStringLiteral("stop music")},
+            {QStringLiteral("action"), QStringLiteral("playerctl stop 2>/dev/null || dbus-send --type=method_call --dest=$(dbus-send --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>/dev/null | grep -oP '\"org\\.mpris\\.MediaPlayer2\\.[^\"]+\"' | head -1 | tr -d '\"') /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Stop")},
+            {QStringLiteral("type"), QStringLiteral("command")},
+            {QStringLiteral("desc"), QStringLiteral("Stop media playback")}
+        },
+        QVariantMap{
+            {QStringLiteral("phrase"), QStringLiteral("next track")},
+            {QStringLiteral("action"), QStringLiteral("playerctl next 2>/dev/null || dbus-send --type=method_call --dest=$(dbus-send --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>/dev/null | grep -oP '\"org\\.mpris\\.MediaPlayer2\\.[^\"]+\"' | head -1 | tr -d '\"') /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Next")},
+            {QStringLiteral("type"), QStringLiteral("command")},
+            {QStringLiteral("desc"), QStringLiteral("Skip to next track")}
+        },
+        QVariantMap{
+            {QStringLiteral("phrase"), QStringLiteral("skip track")},
+            {QStringLiteral("action"), QStringLiteral("playerctl next 2>/dev/null || dbus-send --type=method_call --dest=$(dbus-send --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>/dev/null | grep -oP '\"org\\.mpris\\.MediaPlayer2\\.[^\"]+\"' | head -1 | tr -d '\"') /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Next")},
+            {QStringLiteral("type"), QStringLiteral("command")},
+            {QStringLiteral("desc"), QStringLiteral("Skip to next track")}
+        },
+        QVariantMap{
+            {QStringLiteral("phrase"), QStringLiteral("previous track")},
+            {QStringLiteral("action"), QStringLiteral("playerctl previous 2>/dev/null || dbus-send --type=method_call --dest=$(dbus-send --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>/dev/null | grep -oP '\"org\\.mpris\\.MediaPlayer2\\.[^\"]+\"' | head -1 | tr -d '\"') /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Previous")},
+            {QStringLiteral("type"), QStringLiteral("command")},
+            {QStringLiteral("desc"), QStringLiteral("Go to previous track")}
+        },
+        QVariantMap{
+            {QStringLiteral("phrase"), QStringLiteral("what's playing")},
+            {QStringLiteral("action"), QStringLiteral("playerctl metadata --format '{{artist}} - {{title}}' 2>/dev/null || echo 'No media player active'")},
+            {QStringLiteral("type"), QStringLiteral("command")},
+            {QStringLiteral("desc"), QStringLiteral("Show current track info")}
+        },
     };
     saveCommands();
 }
