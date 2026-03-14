@@ -19,6 +19,7 @@ class JarvisTts;
 class JarvisAudio;
 class JarvisSystem;
 class JarvisCommands;
+class JarvisRag;
 
 class JarvisBackend : public QObject
 {
@@ -310,7 +311,7 @@ private:
     void setStatus(const QString &status);
     void addToChatHistory(const QString &role, const QString &message);
     QJsonArray buildConversationContext() const;
-    QString buildSystemPrompt() const;
+    QString buildSystemPrompt(const QString &ragContext = {}) const;
     QString extractStreamToken(const QString &jsonStr) const;
     void connectModuleSignals();
     void trySpeakCompleteSentences();
@@ -372,6 +373,7 @@ private:
     JarvisAudio *m_audio{nullptr};
     JarvisSystem *m_system{nullptr};
     JarvisCommands *m_commands{nullptr};
+    JarvisRag *m_rag{nullptr};
 
     // Network
     QNetworkAccessManager *m_networkManager{nullptr};
@@ -392,6 +394,7 @@ private:
     QString m_fullStreamedResponse;
     QString m_spokenSoFar;
     QString m_pendingOAuthMessage;
+    QString m_currentRagContext;
 
     // Continuous conversation
     bool m_continuousMode{false};

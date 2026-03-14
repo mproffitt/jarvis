@@ -8,6 +8,7 @@ set(jarvis_plugin_SRCS
     audio/micmonitor.cpp
     system/jarvissystem.cpp
     commands/jarviscommands.cpp
+    rag/jarvisrag.cpp
 )
 
 add_library(jarvis_plugin SHARED ${jarvis_plugin_SRCS})
@@ -29,6 +30,7 @@ target_link_libraries(jarvis_plugin
     Plasma::Plasma
     KF6::I18n
     KF6::Wallet
+    KF6::Baloo
     ${WHISPER_LIBRARIES}
     ${PIPEWIRE_LIBRARIES}
     ${RNNOISE_LIBRARIES}

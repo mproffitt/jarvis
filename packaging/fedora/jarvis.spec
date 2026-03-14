@@ -22,6 +22,7 @@ BuildRequires:  kf6-plasma-devel
 BuildRequires:  kf6-ki18n-devel
 BuildRequires:  kf6-kconfig-devel
 BuildRequires:  kf6-kwallet-devel
+BuildRequires:  kf6-baloo-devel
 BuildRequires:  pipewire-devel
 BuildRequires:  rnnoise-devel
 BuildRequires:  whisper-cpp-devel

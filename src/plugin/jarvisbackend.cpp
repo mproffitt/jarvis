@@ -4,6 +4,7 @@
 #include "audio/jarvisaudio.h"
 #include "system/jarvissystem.h"
 #include "commands/jarviscommands.h"
+#include "rag/jarvisrag.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -33,6 +34,7 @@ JarvisBackend::JarvisBackend(QObject *parent)
     m_audio = new JarvisAudio(m_settings, this);
     m_system = new JarvisSystem(this);
     m_commands = new JarvisCommands(this);
+    m_rag = new JarvisRag(m_settings, this);
 
     connectModuleSignals();
 
@@ -249,7 +251,7 @@ int JarvisBackend::estimatedTokens() const
     int total = 0;
     for (const auto &[role, content] : m_conversationHistory)
         total += estimateTokenCount(content) + 4; // +4 for role/formatting overhead
-    total += estimateTokenCount(buildSystemPrompt());
+    total += estimateTokenCount(buildSystemPrompt(m_currentRagContext));
     return total;
 }
 
@@ -497,6 +499,12 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
     m_conversationHistory.push_back({QStringLiteral("user"), userMessage});
     trimConversationToTokenLimit();
 
+    // Check if RAG context is needed
+    m_currentRagContext.clear();
+    if (JarvisRag::queryNeedsRag(userMessage)) {
+        m_currentRagContext = m_rag->retrieveContext(userMessage);
+    }
+
     // Reset streaming state
     m_streamBuffer.clear();
     m_fullStreamedResponse.clear();
@@ -529,7 +537,7 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
         // Build Cloud Code request format
         QJsonArray contents;
         // System instruction
-        const QString sysPrompt = buildSystemPrompt();
+        const QString sysPrompt = buildSystemPrompt(m_currentRagContext);
         QJsonObject systemInstruction{
             {QStringLiteral("role"), QStringLiteral("user")},
             {QStringLiteral("parts"), QJsonArray{QJsonObject{{QStringLiteral("text"), sysPrompt}}}},
@@ -590,7 +598,7 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
         }
 
         if (m_settings->isClaudeProvider()) {
-            requestBody[QStringLiteral("system")] = buildSystemPrompt();
+            requestBody[QStringLiteral("system")] = buildSystemPrompt(m_currentRagContext);
         }
 
         url = QUrl(m_settings->chatCompletionsUrl());
@@ -634,10 +642,15 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
     connect(m_streamReply, &QNetworkReply::finished, this, &JarvisBackend::onLlmStreamFinished);
 }
 
-QString JarvisBackend::buildSystemPrompt() const
+QString JarvisBackend::buildSystemPrompt(const QString &ragContext) const
 {
     QString systemPrompt = m_settings->personalityPrompt().isEmpty()
         ? QString::fromUtf8(JARVIS_SYSTEM_PROMPT) : m_settings->personalityPrompt();
+
+    // Inject RAG context if provided
+    if (!ragContext.isEmpty()) {
+        systemPrompt += QStringLiteral("\n\n") + ragContext;
+    }
     systemPrompt += QStringLiteral("\n\nCurrent system status:\n");
     systemPrompt += QStringLiteral("- CPU Usage: %1%\n").arg(m_system->cpuUsage(), 0, 'f', 1);
     systemPrompt += QStringLiteral("- Memory: %1 / %2 GB (%3%)\n")
@@ -663,7 +676,7 @@ QJsonArray JarvisBackend::buildConversationContext() const
     if (!m_settings->isClaudeProvider()) {
         QJsonObject systemMsg;
         systemMsg[QStringLiteral("role")] = QStringLiteral("system");
-        systemMsg[QStringLiteral("content")] = buildSystemPrompt();
+        systemMsg[QStringLiteral("content")] = buildSystemPrompt(m_currentRagContext);
         messages.append(systemMsg);
     }
 
@@ -1109,7 +1122,7 @@ void JarvisBackend::addToChatHistory(const QString &role, const QString &message
 void JarvisBackend::trimConversationToTokenLimit()
 {
     const int limit = m_settings->contextTokenLimit();
-    const int systemTokens = estimateTokenCount(buildSystemPrompt());
+    const int systemTokens = estimateTokenCount(buildSystemPrompt(m_currentRagContext));
     // Reserve 20% for the response
     const int available = static_cast<int>(limit * 0.8) - systemTokens;
 

@@ -35,6 +35,7 @@ find_package(KF6 REQUIRED COMPONENTS
     I18n
     Config
     Wallet
+    Baloo
 )
 
 find_package(Plasma REQUIRED)
