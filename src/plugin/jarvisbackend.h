@@ -78,6 +78,8 @@ class JarvisBackend : public QObject
     Q_PROPERTY(bool downloading READ isDownloading NOTIFY downloadingChanged)
     Q_PROPERTY(QString downloadStatus READ downloadStatus NOTIFY downloadStatusChanged)
     Q_PROPERTY(int maxHistoryPairs READ maxHistoryPairs NOTIFY maxHistoryPairsChanged)
+    Q_PROPERTY(int estimatedTokens READ estimatedTokens NOTIFY chatHistoryChanged)
+    Q_PROPERTY(int contextTokenLimit READ contextTokenLimit NOTIFY llmModelIdChanged)
     Q_PROPERTY(int wakeBufferSeconds READ wakeBufferSeconds NOTIFY wakeBufferSecondsChanged)
     Q_PROPERTY(int voiceCmdMaxSeconds READ voiceCmdMaxSeconds NOTIFY voiceCmdMaxSecondsChanged)
     Q_PROPERTY(int silenceTimeoutMs READ silenceTimeoutMs NOTIFY silenceTimeoutMsChanged)
@@ -153,6 +155,8 @@ public:
     [[nodiscard]] bool isDownloading() const;
     [[nodiscard]] QString downloadStatus() const;
     [[nodiscard]] int maxHistoryPairs() const;
+    [[nodiscard]] int estimatedTokens() const;
+    [[nodiscard]] int contextTokenLimit() const;
     [[nodiscard]] int wakeBufferSeconds() const;
     [[nodiscard]] int voiceCmdMaxSeconds() const;
     [[nodiscard]] int silenceTimeoutMs() const;
@@ -303,6 +307,8 @@ private:
     void connectModuleSignals();
     void trySpeakCompleteSentences();
     void finalizeStreamingResponse();
+    static int estimateTokenCount(const QString &text) { return text.length() / 4; }
+    void trimConversationToTokenLimit();
     void saveChatHistory();
     void loadChatHistory();
 

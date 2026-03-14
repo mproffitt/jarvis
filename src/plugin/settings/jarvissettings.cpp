@@ -553,6 +553,38 @@ bool JarvisSettings::providerNeedsModelInRequest() const
     return m_llmProvider != QStringLiteral("llamacpp");
 }
 
+int JarvisSettings::contextTokenLimit() const
+{
+    const QString model = m_llmModelId.toLower();
+
+    // Claude models
+    if (m_llmProvider == QStringLiteral("claude")) {
+        if (model.contains(QStringLiteral("opus"))) return 200000;
+        if (model.contains(QStringLiteral("sonnet"))) return 200000;
+        if (model.contains(QStringLiteral("haiku"))) return 200000;
+        return 200000;
+    }
+    // Gemini models
+    if (m_llmProvider == QStringLiteral("gemini")) {
+        if (model.contains(QStringLiteral("2.5"))) return 1000000;
+        if (model.contains(QStringLiteral("2.0"))) return 1000000;
+        return 1000000;
+    }
+    // OpenAI models
+    if (m_llmProvider == QStringLiteral("openai")) {
+        if (model.contains(QStringLiteral("gpt-4o"))) return 128000;
+        if (model.contains(QStringLiteral("gpt-4.1"))) return 1000000;
+        if (model.contains(QStringLiteral("o3"))) return 200000;
+        if (model.contains(QStringLiteral("o4"))) return 200000;
+        return 128000;
+    }
+    // Ollama / llama.cpp — varies widely, use conservative default
+    if (model.contains(QStringLiteral("llama3"))) return 128000;
+    if (model.contains(QStringLiteral("qwen"))) return 32000;
+    if (model.contains(QStringLiteral("mistral"))) return 32000;
+    return 8192; // Safe fallback for unknown models
+}
+
 void JarvisSettings::fetchCloudModels()
 {
     if (m_llmProvider == QStringLiteral("llamacpp") || m_llmProvider == QStringLiteral("ollama"))

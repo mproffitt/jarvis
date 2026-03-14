@@ -46,6 +46,7 @@ public:
     [[nodiscard]] bool isDownloading() const { return m_downloading; }
     [[nodiscard]] QString downloadStatus() const { return m_downloadStatus; }
     [[nodiscard]] int maxHistoryPairs() const { return m_maxHistoryPairs; }
+    [[nodiscard]] int contextTokenLimit() const;
     [[nodiscard]] int wakeBufferSeconds() const { return m_wakeBufferSeconds; }
     [[nodiscard]] int voiceCmdMaxSeconds() const { return m_voiceCmdMaxSeconds; }
     [[nodiscard]] int silenceTimeoutMs() const { return m_silenceTimeoutMs; }

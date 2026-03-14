@@ -489,11 +489,19 @@ PlasmoidItem {
                             }
                         }
 
-                        // Context window indicator
+                        // Context window indicator with token count
                         Text {
                             visible: chatView.count > 0
-                            text: Math.ceil(chatView.count / 2) + " / " + JarvisBackend.maxHistoryPairs + " conversations"
-                            color: chatView.count >= JarvisBackend.maxHistoryPairs * 2 ? "#e8a838" : "#3a5a6f"
+                            property real tokenPct: JarvisBackend.contextTokenLimit > 0
+                                ? JarvisBackend.estimatedTokens / JarvisBackend.contextTokenLimit : 0
+                            text: {
+                                var tokens = JarvisBackend.estimatedTokens
+                                var limit = JarvisBackend.contextTokenLimit
+                                var t = tokens > 1000 ? (tokens / 1000).toFixed(1) + "K" : tokens
+                                var l = limit > 1000 ? (limit / 1000).toFixed(0) + "K" : limit
+                                return "~" + t + " / " + l + " tokens"
+                            }
+                            color: tokenPct > 0.95 ? "#ff4444" : tokenPct > 0.8 ? "#e8a838" : "#3a5a6f"
                             font { pixelSize: 8; family: monoFont }
                             Layout.alignment: Qt.AlignRight
                         }

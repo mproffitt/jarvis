@@ -240,6 +240,17 @@ double JarvisBackend::downloadProgress() const { return m_settings->downloadProg
 bool JarvisBackend::isDownloading() const { return m_settings->isDownloading(); }
 QString JarvisBackend::downloadStatus() const { return m_settings->downloadStatus(); }
 int JarvisBackend::maxHistoryPairs() const { return m_settings->maxHistoryPairs(); }
+int JarvisBackend::contextTokenLimit() const { return m_settings->contextTokenLimit(); }
+
+int JarvisBackend::estimatedTokens() const
+{
+    int total = 0;
+    for (const auto &[role, content] : m_conversationHistory)
+        total += estimateTokenCount(content) + 4; // +4 for role/formatting overhead
+    total += estimateTokenCount(buildSystemPrompt());
+    return total;
+}
+
 int JarvisBackend::wakeBufferSeconds() const { return m_settings->wakeBufferSeconds(); }
 int JarvisBackend::voiceCmdMaxSeconds() const { return m_settings->voiceCmdMaxSeconds(); }
 int JarvisBackend::silenceTimeoutMs() const { return m_settings->silenceTimeoutMs(); }
@@ -477,11 +488,7 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
     setStatus("Processing...");
 
     m_conversationHistory.push_back({QStringLiteral("user"), userMessage});
-
-    const int maxPairs = m_settings->maxHistoryPairs();
-    while (m_conversationHistory.size() > static_cast<size_t>(maxPairs * 2)) {
-        m_conversationHistory.erase(m_conversationHistory.begin());
-    }
+    trimConversationToTokenLimit();
 
     // Reset streaming state
     m_streamBuffer.clear();
@@ -1090,6 +1097,30 @@ void JarvisBackend::addToChatHistory(const QString &role, const QString &message
 
     emit chatHistoryChanged();
     saveChatHistory();
+}
+
+void JarvisBackend::trimConversationToTokenLimit()
+{
+    const int limit = m_settings->contextTokenLimit();
+    const int systemTokens = estimateTokenCount(buildSystemPrompt());
+    // Reserve 20% for the response
+    const int available = static_cast<int>(limit * 0.8) - systemTokens;
+
+    // Also enforce max pairs
+    const int maxPairs = m_settings->maxHistoryPairs();
+    while (m_conversationHistory.size() > static_cast<size_t>(maxPairs * 2)) {
+        m_conversationHistory.erase(m_conversationHistory.begin());
+    }
+
+    // Trim by token count — remove oldest messages until under budget
+    int totalTokens = 0;
+    for (const auto &[role, content] : m_conversationHistory)
+        totalTokens += estimateTokenCount(content) + 4;
+
+    while (totalTokens > available && m_conversationHistory.size() > 1) {
+        totalTokens -= estimateTokenCount(m_conversationHistory.front().content) + 4;
+        m_conversationHistory.erase(m_conversationHistory.begin());
+    }
 }
 
 void JarvisBackend::saveChatHistory()
