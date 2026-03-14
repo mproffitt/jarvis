@@ -264,8 +264,10 @@ PlasmoidItem {
                             }
                         }
                         Text {
-                            text: JarvisBackend.statusText
-                            color: "#3aaabf"
+                            text: JarvisBackend.micBusy
+                                ? "⏸ Mic in use — wake word paused"
+                                : JarvisBackend.statusText
+                            color: JarvisBackend.micBusy ? "#e8a838" : "#3aaabf"
                             font { pixelSize: 9; family: monoFont }
                             elide: Text.ElideRight
                             Layout.fillWidth: true

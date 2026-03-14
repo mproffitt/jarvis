@@ -182,6 +182,11 @@ void JarvisAudio::stopListening()
 // Wake Word Detection
 // ─────────────────────────────────────────────
 
+bool JarvisAudio::isMicBusy() const
+{
+    return m_micMonitor && m_micMonitor->isMicBusy();
+}
+
 void JarvisAudio::setTtsSpeaking(bool speaking)
 {
     m_ttsSpeaking = speaking;

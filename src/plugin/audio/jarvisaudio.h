@@ -28,6 +28,7 @@ public:
     [[nodiscard]] bool isWakeWordActive() const { return m_wakeWordActive.load(); }
     [[nodiscard]] double audioLevel() const { return m_audioLevel; }
     [[nodiscard]] bool isVoiceCommandMode() const { return m_voiceCommandMode.load(); }
+    [[nodiscard]] bool isMicBusy() const;
     [[nodiscard]] QString lastTranscription() const { return m_lastTranscription; }
 
     void toggleWakeWord();

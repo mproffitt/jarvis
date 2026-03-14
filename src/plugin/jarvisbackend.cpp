@@ -78,6 +78,11 @@ void JarvisBackend::connectModuleSignals()
         if (m_continuousMode) m_conversationActive = true;
     });
     connect(m_audio, &JarvisAudio::voiceCommandTranscribed, this, &JarvisBackend::onVoiceCommandTranscribed);
+    connect(m_audio, &JarvisAudio::micBusyChanged, this, [this](bool busy) {
+        emit micBusyChanged();
+        if (busy) setStatus("Mic in use by another app — wake word paused.");
+        else setStatus("Mic free — wake word active.");
+    });
 
     // TTS → Backend
     connect(m_tts, &JarvisTts::speakingChanged, this, [this]() {
@@ -196,6 +201,7 @@ void JarvisBackend::connectModuleSignals()
 
 bool JarvisBackend::isListening() const { return m_audio->isListening(); }
 bool JarvisBackend::isWakeWordActive() const { return m_audio->isWakeWordActive(); }
+bool JarvisBackend::isMicBusy() const { return m_audio->isMicBusy(); }
 double JarvisBackend::audioLevel() const { return m_audio->audioLevel(); }
 bool JarvisBackend::isSpeaking() const { return m_tts->isSpeaking(); }
 bool JarvisBackend::isTtsMuted() const { return m_tts->isMuted(); }

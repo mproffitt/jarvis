@@ -33,6 +33,7 @@ class JarvisBackend : public QObject
     Q_PROPERTY(bool processing READ isProcessing NOTIFY processingChanged)
     Q_PROPERTY(bool wakeWordActive READ isWakeWordActive NOTIFY wakeWordActiveChanged)
     Q_PROPERTY(bool connected READ isConnected NOTIFY connectedChanged)
+    Q_PROPERTY(bool micBusy READ isMicBusy NOTIFY micBusyChanged)
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusTextChanged)
     Q_PROPERTY(QStringList chatHistory READ chatHistory NOTIFY chatHistoryChanged)
     Q_PROPERTY(double audioLevel READ audioLevel NOTIFY audioLevelChanged)
@@ -106,6 +107,7 @@ public:
     [[nodiscard]] bool isProcessing() const { return m_processing; }
     [[nodiscard]] bool isWakeWordActive() const;
     [[nodiscard]] bool isConnected() const { return m_connected; }
+    [[nodiscard]] bool isMicBusy() const;
     [[nodiscard]] QString statusText() const { return m_statusText; }
     [[nodiscard]] QStringList chatHistory() const { return m_chatHistory; }
     [[nodiscard]] double audioLevel() const;
@@ -237,6 +239,7 @@ signals:
     void processingChanged();
     void wakeWordActiveChanged();
     void connectedChanged();
+    void micBusyChanged();
     void statusTextChanged();
     void chatHistoryChanged();
     void audioLevelChanged();
