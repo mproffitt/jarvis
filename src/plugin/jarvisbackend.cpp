@@ -75,10 +75,67 @@ void JarvisBackend::connectModuleSignals()
     connect(m_audio, &JarvisAudio::audioLevelChanged, this, &JarvisBackend::audioLevelChanged);
     connect(m_audio, &JarvisAudio::voiceCommandModeChanged, this, &JarvisBackend::voiceCommandModeChanged);
     connect(m_audio, &JarvisAudio::lastTranscriptionChanged, this, &JarvisBackend::lastTranscriptionChanged);
-    connect(m_audio, &JarvisAudio::wakeWordDetected, this, [this]() {
-        emit wakeWordDetected();
-        setStatus("Wake word detected! Listening...");
-        if (m_continuousMode) m_conversationActive = true;
+    connect(m_audio, &JarvisAudio::wakeWordMatch, this, [this](const QString &word) {
+        // Provider name wake words
+        static const QHash<QString, QString> providerMap = {
+            {QStringLiteral("claude"), QStringLiteral("claude")},
+            {QStringLiteral("gemini"), QStringLiteral("gemini")},
+            {QStringLiteral("ollama"), QStringLiteral("ollama")},
+            {QStringLiteral("openai"), QStringLiteral("openai")},
+            {QStringLiteral("chatgpt"), QStringLiteral("openai")},
+        };
+
+        const QString wakeWord = m_settings->wakeWord().toLower();
+        bool valid = false;
+
+        if (word == wakeWord) {
+            setStatus("Wake word detected! Listening...");
+            valid = true;
+        } else if (providerMap.contains(word)) {
+            const QString provider = providerMap[word];
+            if (m_settings->llmProvider() != provider)
+                m_settings->setLlmProvider(provider);
+            setStatus(QStringLiteral("Switched to %1. Listening...").arg(provider));
+            valid = true;
+        } else {
+            // Search Ollama models
+            const auto ollamaModels = m_settings->availableLlmModels();
+            for (const auto &v : ollamaModels) {
+                const auto map = v.toMap();
+                const QString id = map[QStringLiteral("id")].toString().toLower();
+                const QString name = map[QStringLiteral("name")].toString().toLower();
+                if (id.contains(word) || name.contains(word)) {
+                    if (m_settings->llmProvider() != QStringLiteral("ollama"))
+                        m_settings->setLlmProvider(QStringLiteral("ollama"));
+                    m_settings->setLlmModelId(map[QStringLiteral("id")].toString());
+                    setStatus(QStringLiteral("Switched to %1. Listening...").arg(map[QStringLiteral("name")].toString()));
+                    valid = true;
+                    break;
+                }
+            }
+            // Search cloud models
+            if (!valid) {
+                const auto cloudModels = m_settings->cloudModelChoices();
+                for (const auto &v : cloudModels) {
+                    const auto map = v.toMap();
+                    const QString id = map[QStringLiteral("id")].toString().toLower();
+                    const QString name = map[QStringLiteral("name")].toString().toLower();
+                    if (id.contains(word) || name.contains(word)) {
+                        m_settings->setLlmModelId(map[QStringLiteral("id")].toString());
+                        setStatus(QStringLiteral("Switched to %1. Listening...").arg(map[QStringLiteral("name")].toString()));
+                        valid = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (valid) {
+            emit wakeWordDetected();
+            if (m_continuousMode) m_conversationActive = true;
+            m_audio->startVoiceCommand();
+        }
+        // Invalid match — silently ignore
     });
     connect(m_audio, &JarvisAudio::voiceCommandTranscribed, this, &JarvisBackend::onVoiceCommandTranscribed);
     connect(m_audio, &JarvisAudio::micBusyChanged, this, [this](bool busy) {

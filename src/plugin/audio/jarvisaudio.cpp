@@ -244,24 +244,23 @@ void JarvisAudio::processAudioBuffer()
 
     m_whisperBusy = true;
     [[maybe_unused]] auto f = QtConcurrent::run([this, cleanAudio]() {
-        const bool detected = detectWakeWord(cleanAudio);
+        const QString matched = detectWakeWord(cleanAudio);
         m_whisperBusy = false;
 
-        if (detected) {
-            QMetaObject::invokeMethod(this, [this]() {
-                emit wakeWordDetected();
-                startVoiceCommand();
+        if (!matched.isEmpty()) {
+            QMetaObject::invokeMethod(this, [this, matched]() {
+                emit wakeWordMatch(matched);
             }, Qt::QueuedConnection);
         }
     });
 }
 
-bool JarvisAudio::detectWakeWord(const QByteArray &audioData)
+QString JarvisAudio::detectWakeWord(const QByteArray &audioData)
 {
-    if (!m_whisperCtx) return false;
+    if (!m_whisperCtx) return {};
 
     auto floatSamples = pcm16ToFloat(audioData);
-    if (floatSamples.empty()) return false;
+    if (floatSamples.empty()) return {};
 
     QMutexLocker lock(&m_whisperMutex);
 
@@ -282,7 +281,7 @@ bool JarvisAudio::detectWakeWord(const QByteArray &audioData)
                                  static_cast<int>(floatSamples.size()));
     if (ret != 0) {
         qWarning() << "[JARVIS] Whisper inference failed with code:" << ret;
-        return false;
+        return {};
     }
 
     const int nSegments = whisper_full_n_segments(m_whisperCtx);
@@ -293,19 +292,38 @@ bool JarvisAudio::detectWakeWord(const QByteArray &audioData)
         QString transcript = QString::fromUtf8(text).toLower().trimmed();
         qDebug() << "[JARVIS] Whisper heard:" << transcript;
 
+        // Check primary wake word
         const QString wakeWord = m_settings->wakeWord().toLower();
-        // Check for the wake word and common misheard variants
-        if (transcript.contains(wakeWord)) {
-            return true;
-        }
-        // Generate fuzzy variants: drop last char, swap vowels
+        if (transcript.contains(wakeWord))
+            return wakeWord;
         if (wakeWord.length() >= 3) {
             const QString prefix = wakeWord.left(wakeWord.length() - 1);
-            if (transcript.contains(prefix)) return true;
+            if (transcript.contains(prefix)) return wakeWord;
+        }
+
+        // Check provider wake words (e.g. "claude", "gemini", "ollama")
+        static const QStringList providerWords = {
+            QStringLiteral("claude"), QStringLiteral("gemini"),
+            QStringLiteral("ollama"), QStringLiteral("openai"),
+            QStringLiteral("chatgpt"),
+        };
+        for (const auto &pw : providerWords) {
+            if (pw == wakeWord) continue; // Already checked above
+            if (transcript.contains(pw)) return pw;
+        }
+
+        // Check model names that might be used as wake words
+        static const QStringList modelWords = {
+            QStringLiteral("qwen"), QStringLiteral("llama"),
+            QStringLiteral("mistral"), QStringLiteral("opus"),
+            QStringLiteral("sonnet"), QStringLiteral("haiku"),
+        };
+        for (const auto &mw : modelWords) {
+            if (transcript.contains(mw)) return mw;
         }
     }
 
-    return false;
+    return {};
 }
 
 QString JarvisAudio::transcribeAudio(const QByteArray &audioData)

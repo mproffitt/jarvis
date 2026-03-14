@@ -50,6 +50,7 @@ signals:
     void wakeWordActiveChanged();
     void audioLevelChanged();
     void wakeWordDetected();
+    void wakeWordMatch(const QString &word);
     void voiceCommandModeChanged();
     void lastTranscriptionChanged();
     void voiceCommandTranscribed(const QString &text);
@@ -65,7 +66,7 @@ private:
     void initWhisper();
     void startListening();
     void stopListening();
-    bool detectWakeWord(const QByteArray &audioData);
+    QString detectWakeWord(const QByteArray &audioData);
     QString transcribeAudio(const QByteArray &audioData);
     std::vector<float> pcm16ToFloat(const QByteArray &audioData) const;
     QString findWhisperModel() const;
