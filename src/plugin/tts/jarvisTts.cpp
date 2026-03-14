@@ -3,10 +3,12 @@
 
 #include <QDir>
 #include <QFile>
-#include <QDateTime>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QRegularExpression>
 #include <QLocale>
 #include <QVoice>
+#include <QTimer>
 #include <QDebug>
 
 JarvisTts::JarvisTts(JarvisSettings *settings, QObject *parent)
@@ -19,7 +21,6 @@ JarvisTts::JarvisTts(JarvisSettings *settings, QObject *parent)
 JarvisTts::~JarvisTts()
 {
     stop();
-    stopPiperProcess();
 }
 
 void JarvisTts::initTts()
@@ -40,6 +41,7 @@ void JarvisTts::initTts()
     if (!m_piperBin.isEmpty() && !modelPath.isEmpty()) {
         m_usePiper = true;
         qDebug() << "[JARVIS] Using piper-tts for speech:" << m_piperBin << "model:" << modelPath;
+        qDebug() << "[JARVIS] Piper ready for per-sentence synthesis";
     } else {
         m_usePiper = false;
         qDebug() << "[JARVIS] Piper not found, falling back to espeak-ng";
@@ -68,67 +70,12 @@ void JarvisTts::initTts()
 }
 
 // ─────────────────────────────────────────────
-// Persistent Piper Process Management
-// ─────────────────────────────────────────────
-
-void JarvisTts::startPiperProcess()
-{
-    if (m_piperProcess && m_piperProcess->state() == QProcess::Running) {
-        return; // Already running
-    }
-
-    stopPiperProcess();
-
-    m_currentWavPath = QDir::tempPath() + QStringLiteral("/jarvis_tts_pipe.wav");
-
-    // Piper reads JSON-lines from stdin when using --json-input and --output-file
-    // For persistent mode: we pipe text lines to stdin, piper writes wav to file
-    // We use a wrapper script that reads lines and synthesizes each one
-    m_piperProcess = new QProcess(this);
-    m_piperProcess->setProcessChannelMode(QProcess::MergedChannels);
-
-    connect(m_piperProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, &JarvisTts::onPiperFinished);
-
-    qDebug() << "[JARVIS] Starting persistent Piper process";
-}
-
-void JarvisTts::stopPiperProcess()
-{
-    if (m_piperProcess) {
-        if (m_piperProcess->state() != QProcess::NotRunning) {
-            m_piperProcess->kill();
-            m_piperProcess->waitForFinished(1000);
-        }
-        delete m_piperProcess;
-        m_piperProcess = nullptr;
-    }
-    if (m_playProcess) {
-        if (m_playProcess->state() != QProcess::NotRunning) {
-            m_playProcess->kill();
-            m_playProcess->waitForFinished(500);
-        }
-        delete m_playProcess;
-        m_playProcess = nullptr;
-    }
-}
-
-void JarvisTts::onPiperFinished(int exitCode, QProcess::ExitStatus status)
-{
-    Q_UNUSED(status)
-    if (exitCode != 0) {
-        qWarning() << "[JARVIS] Piper process exited with code:" << exitCode;
-    }
-}
-
-// ─────────────────────────────────────────────
 // Sentence Splitting
 // ─────────────────────────────────────────────
 
 QStringList JarvisTts::splitIntoSentences(const QString &text)
 {
     QStringList sentences;
-    // Split on sentence-ending punctuation followed by whitespace or end
     static const QRegularExpression sentenceRe(
         QStringLiteral("(?<=[.!?;:])\\s+|(?<=[.!?;:])$"));
 
@@ -140,7 +87,6 @@ QStringList JarvisTts::splitIntoSentences(const QString &text)
         }
     }
 
-    // If no punctuation found, return the whole text as one sentence
     if (sentences.isEmpty() && !text.trimmed().isEmpty()) {
         sentences.append(text.trimmed());
     }
@@ -161,7 +107,6 @@ void JarvisTts::speak(const QString &text)
     cleanText.replace(QStringLiteral("\n"), QStringLiteral(". "));
 
     if (m_usePiper) {
-        // Split into sentences and queue them for streaming playback
         const QStringList sentences = splitIntoSentences(cleanText);
         {
             QMutexLocker lock(&m_queueMutex);
@@ -227,9 +172,8 @@ void JarvisTts::processNextSentence()
         return;
     }
 
-    // Stream directly: piper --output_raw | pw-cat --playback (no temp files)
+    // Stream per sentence: piper --output_raw | pw-cat --playback
     const double lengthScale = 1.0 - (m_settings->ttsRate() * 0.5);
-
     const QString quotedText = QStringLiteral("'") +
         QString(sentence).replace(QStringLiteral("'"), QStringLiteral("'\\''")) +
         QStringLiteral("'");
@@ -243,36 +187,32 @@ void JarvisTts::processNextSentence()
     cmd += QStringLiteral(" --sentence-silence 0.2");
     cmd += QStringLiteral(" | pw-cat --playback --raw --rate=22050 --channels=1 --format=s16 --quality=10 -");
 
-    auto *proc = new QProcess(this);
-    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, proc](int, QProcess::ExitStatus) {
-        proc->deleteLater();
-        // Play next sentence in queue
+    m_sentenceProc = new QProcess(this);
+    connect(m_sentenceProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this](int, QProcess::ExitStatus) {
+        if (m_sentenceProc) {
+            m_sentenceProc->deleteLater();
+            m_sentenceProc = nullptr;
+        }
         processNextSentence();
     });
 
-    proc->start(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), cmd});
-}
-
-void JarvisTts::playWavFile(const QString &wavPath)
-{
-    Q_UNUSED(wavPath)
-    // Playback is handled inside processNextSentence shell command
+    m_sentenceProc->start(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), cmd});
 }
 
 void JarvisTts::stop()
 {
-    // Clear the sentence queue
     {
         QMutexLocker lock(&m_queueMutex);
         m_sentenceQueue.clear();
     }
     m_playingBack = false;
 
-    if (m_usePiper) {
-        stopPiperProcess();
-        // Also kill any in-flight synthesis/playback processes
-        // They are children that will be cleaned up
+    // Kill any in-flight sentence process
+    if (m_sentenceProc) {
+        m_sentenceProc->kill();
+        m_sentenceProc->deleteLater();
+        m_sentenceProc = nullptr;
     }
     if (m_tts) {
         m_tts->stop();
@@ -300,7 +240,7 @@ bool JarvisTts::isMuted() const
 void JarvisTts::onTtsRateChanged()
 {
     if (!m_usePiper && m_tts) m_tts->setRate(m_settings->ttsRate());
-    // Piper uses --length-scale at speak time
+    // Piper uses --length-scale at speak time — no action needed
 }
 
 void JarvisTts::onTtsPitchChanged()
@@ -313,7 +253,6 @@ void JarvisTts::onTtsVolumeChanged()
     if (!m_usePiper && m_tts) {
         m_tts->setVolume(m_settings->ttsVolume());
     }
-    // Piper volume is controlled by pw-play's default volume
 }
 
 void JarvisTts::onVoiceActivated(const QString &voiceId, const QString &onnxPath)

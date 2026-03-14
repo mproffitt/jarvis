@@ -7,7 +7,6 @@
 #include <QTextToSpeech>
 #include <QQueue>
 #include <QMutex>
-#include <QTemporaryFile>
 #include <atomic>
 
 class JarvisSettings;
@@ -42,19 +41,13 @@ signals:
 
 private:
     void initTts();
-    void startPiperProcess();
-    void stopPiperProcess();
     void processNextSentence();
-    void onPiperFinished(int exitCode, QProcess::ExitStatus status);
-    void playWavFile(const QString &wavPath);
 
     JarvisSettings *m_settings{nullptr};
-
     QTextToSpeech *m_tts{nullptr};
 
-    // Persistent Piper process
-    QProcess *m_piperProcess{nullptr};
-    QProcess *m_playProcess{nullptr};
+    // Per-sentence piper process
+    QProcess *m_sentenceProc{nullptr};
     QString m_piperBin;
     bool m_usePiper{false};
     std::atomic<bool> m_speaking{false};
@@ -63,5 +56,4 @@ private:
     QQueue<QString> m_sentenceQueue;
     QMutex m_queueMutex;
     bool m_playingBack{false};
-    QString m_currentWavPath;
 };
