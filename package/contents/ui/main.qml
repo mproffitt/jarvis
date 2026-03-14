@@ -424,13 +424,17 @@ PlasmoidItem {
                                                 width: 2; height: parent.height - 8; y: 4; x: 4; radius: 1
                                                 color: role === "user" ? Qt.rgba(0.94, 0.63, 0.19, 0.3) : Qt.rgba(0.3, 0.79, 0.96, 0.3)
                                             }
-                                            Text {
+                                            TextEdit {
                                                 id: msgTxt
                                                 anchors { fill: parent; margins: 7; leftMargin: 12; rightMargin: role === "user" ? 7 : 24 }
                                                 text: msg
                                                 color: role === "user" ? "#b0c4d8" : "#d0eaf4"
                                                 font { pixelSize: 11; family: uiFont }
-                                                wrapMode: Text.WordWrap; lineHeight: 1.3
+                                                wrapMode: TextEdit.WordWrap
+                                                textFormat: TextEdit.MarkdownText
+                                                readOnly: true
+                                                selectByMouse: false
+                                                activeFocusOnPress: false
                                             }
                                             // Copy button for assistant responses
                                             MouseArea {
