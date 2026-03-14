@@ -59,7 +59,7 @@ JarvisBackend::JarvisBackend(QObject *parent)
     connect(m_reminderTimer, &QTimer::timeout, this, &JarvisBackend::checkReminders);
     m_reminderTimer->start(1000);
 
-    setStatus("J.A.R.V.I.S. online. All systems nominal, Sir.");
+    setStatus("Online. All systems operational.");
 }
 
 JarvisBackend::~JarvisBackend() = default;
@@ -74,7 +74,7 @@ void JarvisBackend::connectModuleSignals()
     connect(m_audio, &JarvisAudio::lastTranscriptionChanged, this, &JarvisBackend::lastTranscriptionChanged);
     connect(m_audio, &JarvisAudio::wakeWordDetected, this, [this]() {
         emit wakeWordDetected();
-        setStatus("Wake word detected! Listening, Sir...");
+        setStatus("Wake word detected! Listening...");
         if (m_continuousMode) m_conversationActive = true;
     });
     connect(m_audio, &JarvisAudio::voiceCommandTranscribed, this, &JarvisBackend::onVoiceCommandTranscribed);
@@ -319,7 +319,7 @@ void JarvisBackend::testVoice(const QString &voiceId)
 
     // Use printf to avoid shell quoting issues with echo
     QString cmd = QStringLiteral(
-        "printf '%s' 'At your service, Sir. All systems are nominal.' | "
+        "printf '%s' 'All systems are nominal.' | "
         "'%1' -m '%2' -f '%3' --sentence-silence 0.3 2>/dev/null && "
         "pw-play '%3' 2>/dev/null; rm -f '%3'"
     ).arg(piperBin, onnxPath, wavPath);
@@ -385,7 +385,7 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
             // Re-listen silently
             m_audio->startVoiceCommand();
         } else {
-            setStatus("I couldn't make out what you said, Sir.");
+            setStatus("I couldn't make out what you said.");
         }
         return;
     }
@@ -422,14 +422,14 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
     command = command.trimmed();
 
     if (command.isEmpty()) {
-        setStatus("Yes, Sir? I'm listening.");
-        speak(QStringLiteral("Yes, Sir?"));
+        setStatus("Yes? I'm listening.");
+        speak(QStringLiteral("Yes?"));
         return;
     }
 
     // Try system commands first
     if (m_commands->tryExecuteVoiceCommand(command)) {
-        speak(QStringLiteral("Right away, Sir."));
+        speak(QStringLiteral("Right away."));
         return;
     }
 
@@ -453,7 +453,7 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
 {
     m_processing = true;
     emit processingChanged();
-    setStatus("Processing your request, Sir...");
+    setStatus("Processing...");
 
     m_conversationHistory.push_back({QStringLiteral("user"), userMessage});
 
@@ -480,13 +480,13 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
         if (apiKey.isEmpty()) {
             if (m_settings->hasOAuthCredentials()) {
                 m_pendingOAuthMessage = userMessage;
-                setStatus("Refreshing authentication token, Sir...");
+                setStatus("Refreshing authentication token...");
                 m_settings->ensureOAuthToken();
                 return;
             }
             m_processing = false;
             emit processingChanged();
-            setStatus("No credentials. Please log in with Google, Sir.");
+            setStatus("No credentials. Please log in with Google.");
             emit errorOccurred("No Gemini credentials. Please log in.");
             return;
         }
@@ -568,13 +568,13 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
             if (apiKey.isEmpty()) {
                 if (m_settings->hasOAuthCredentials()) {
                     m_pendingOAuthMessage = userMessage;
-                    setStatus("Refreshing authentication token, Sir...");
+                    setStatus("Refreshing authentication token...");
                     m_settings->ensureOAuthToken();
                     return;
                 }
                 m_processing = false;
                 emit processingChanged();
-                setStatus("No API key configured for this provider, Sir.");
+                setStatus("No API key configured for this provider.");
                 emit errorOccurred("No API key configured. Please set one in settings.");
                 return;
             }
@@ -790,7 +790,7 @@ void JarvisBackend::finalizeStreamingResponse()
     const QString responseText = m_fullStreamedResponse.trimmed();
 
     if (responseText.isEmpty()) {
-        m_lastResponse = QStringLiteral("I apologize, Sir. I wasn't able to formulate a response.");
+        m_lastResponse = QStringLiteral("Sorry, I wasn't able to formulate a response.");
         emit lastResponseChanged();
         addToChatHistory("jarvis", m_lastResponse);
         setStatus("Ready.");
@@ -842,7 +842,7 @@ void JarvisBackend::onLlmStreamFinished()
 
     if (error != QNetworkReply::NoError && m_fullStreamedResponse.isEmpty()) {
         qWarning() << "[JARVIS] LLM request failed:" << httpStatus << errorString;
-        const auto errorMsg = QStringLiteral("I'm experiencing a connection issue, Sir: %1")
+        const auto errorMsg = QStringLiteral("Connection issue: %1")
                                   .arg(errorString);
         setStatus(errorMsg);
         emit errorOccurred(errorMsg);
@@ -891,7 +891,7 @@ void JarvisBackend::checkConnection()
         if (m_connected != wasConnected) {
             emit connectedChanged();
             if (m_connected) {
-                setStatus("Credentials ready. All systems operational, Sir.");
+                setStatus("Credentials ready. All systems operational.");
             } else {
                 setStatus("No API credentials configured. Please log in or add an API key.");
             }
@@ -920,7 +920,7 @@ void JarvisBackend::onHealthCheckFinished(QNetworkReply *reply)
     if (m_connected != wasConnected) {
         emit connectedChanged();
         if (m_connected) {
-            setStatus("LLM server connected. All systems operational, Sir.");
+            setStatus("LLM server connected. All systems operational.");
         } else {
             setStatus("LLM server offline. Attempting to reconnect...");
         }
@@ -944,7 +944,7 @@ void JarvisBackend::addReminder(const QString &text, int secondsFromNow)
     m_activeReminders.append(map);
     emit remindersChanged();
 
-    setStatus(QStringLiteral("Reminder set, Sir. I'll notify you at %1.")
+    setStatus(QStringLiteral("Reminder set. I'll notify you at %1.")
                   .arg(r.triggerTime.toString(QStringLiteral("HH:mm"))));
 }
 
@@ -968,7 +968,7 @@ void JarvisBackend::checkReminders()
         if (now >= it->triggerTime) {
             const QString text = it->text;
             emit reminderTriggered(text);
-            speak(QStringLiteral("Excuse me, Sir. Reminder: %1").arg(text));
+            speak(QStringLiteral("Reminder: %1").arg(text));
             addToChatHistory("jarvis", QStringLiteral("\u23f0 Reminder: %1").arg(text));
 
             it = m_reminders.erase(it);
@@ -998,7 +998,7 @@ void JarvisBackend::clearHistory()
     m_lastResponse.clear();
     emit chatHistoryChanged();
     emit lastResponseChanged();
-    setStatus("Memory cleared, Sir. Fresh start.");
+    setStatus("Memory cleared. Fresh start.");
 }
 
 void JarvisBackend::setStatus(const QString &status)
