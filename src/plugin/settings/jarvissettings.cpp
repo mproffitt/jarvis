@@ -164,6 +164,8 @@ void JarvisSettings::loadSettings()
     m_whisperModel = m_settings.value(QStringLiteral("audio/whisperModel"), QStringLiteral("tiny")).toString();
     m_wakeWord = m_settings.value(QStringLiteral("audio/wakeWord"), QStringLiteral("jarvis")).toString();
     m_continuousMode = m_settings.value(QStringLiteral("audio/continuousMode"), false).toBool();
+    m_smartRouting = m_settings.value(QStringLiteral("llm/smartRouting"), false).toBool();
+    m_fastModelId = m_settings.value(QStringLiteral("llm/fastModelId")).toString();
     m_ttsRate = m_settings.value(QStringLiteral("tts/rate"), 0.05).toDouble();
     m_ttsPitch = m_settings.value(QStringLiteral("tts/pitch"), -0.1).toDouble();
     m_ttsVolume = m_settings.value(QStringLiteral("tts/volume"), 0.85).toDouble();
@@ -202,6 +204,8 @@ void JarvisSettings::saveSettings()
     m_settings.setValue(QStringLiteral("audio/whisperModel"), m_whisperModel);
     m_settings.setValue(QStringLiteral("audio/wakeWord"), m_wakeWord);
     m_settings.setValue(QStringLiteral("audio/continuousMode"), m_continuousMode);
+    m_settings.setValue(QStringLiteral("llm/smartRouting"), m_smartRouting);
+    m_settings.setValue(QStringLiteral("llm/fastModelId"), m_fastModelId);
     m_settings.setValue(QStringLiteral("tts/rate"), m_ttsRate);
     m_settings.setValue(QStringLiteral("tts/pitch"), m_ttsPitch);
     m_settings.setValue(QStringLiteral("tts/volume"), m_ttsVolume);
@@ -454,6 +458,55 @@ void JarvisSettings::setContinuousMode(bool enabled)
         saveSettings();
         emit continuousModeChanged();
     }
+}
+
+void JarvisSettings::setSmartRouting(bool enabled)
+{
+    if (m_smartRouting != enabled) {
+        m_smartRouting = enabled;
+        saveSettings();
+        emit smartRoutingChanged();
+    }
+}
+
+void JarvisSettings::setFastModelId(const QString &modelId)
+{
+    if (m_fastModelId != modelId) {
+        m_fastModelId = modelId;
+        // Save per-provider
+        m_settings.setValue(QStringLiteral("llm/fastModelId/%1").arg(m_llmProvider), modelId);
+        saveSettings();
+        emit fastModelIdChanged();
+    }
+}
+
+QString JarvisSettings::routeModel(const QString &query) const
+{
+    if (!m_smartRouting || m_fastModelId.isEmpty())
+        return m_llmModelId;
+
+    const QString lower = query.toLower();
+    const int wordCount = lower.split(QLatin1Char(' '), Qt::SkipEmptyParts).size();
+
+    // Complex indicators — use full model
+    static const QStringList complexKeywords = {
+        QStringLiteral("explain"), QStringLiteral("describe"), QStringLiteral("analyze"),
+        QStringLiteral("compare"), QStringLiteral("write"), QStringLiteral("code"),
+        QStringLiteral("implement"), QStringLiteral("step by step"), QStringLiteral("in detail"),
+        QStringLiteral("summarize"), QStringLiteral("translate"), QStringLiteral("review"),
+        QStringLiteral("debug"), QStringLiteral("refactor"), QStringLiteral("why"),
+        QStringLiteral("how does"), QStringLiteral("difference between"),
+    };
+
+    for (const auto &kw : complexKeywords) {
+        if (lower.contains(kw)) return m_llmModelId;
+    }
+
+    // Long queries are likely complex
+    if (wordCount > 15) return m_llmModelId;
+
+    // Short/simple queries — use fast model
+    return m_fastModelId;
 }
 
 void JarvisSettings::setPersonalityPrompt(const QString &prompt)

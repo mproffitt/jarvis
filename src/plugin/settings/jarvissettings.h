@@ -54,6 +54,8 @@ public:
     [[nodiscard]] QString whisperModel() const { return m_whisperModel; }
     [[nodiscard]] QString wakeWord() const { return m_wakeWord; }
     [[nodiscard]] bool continuousMode() const { return m_continuousMode; }
+    [[nodiscard]] bool smartRouting() const { return m_smartRouting; }
+    [[nodiscard]] QString fastModelId() const { return m_fastModelId; }
     [[nodiscard]] QString personalityPrompt() const { return m_personalityPrompt; }
     [[nodiscard]] double ttsRate() const { return m_ttsRate; }
     [[nodiscard]] double ttsPitch() const { return m_ttsPitch; }
@@ -76,6 +78,9 @@ public:
     void setWhisperModel(const QString &model);
     void setWakeWord(const QString &word);
     void setContinuousMode(bool enabled);
+    void setSmartRouting(bool enabled);
+    void setFastModelId(const QString &modelId);
+    [[nodiscard]] QString routeModel(const QString &query) const;
     void setPersonalityPrompt(const QString &prompt);
     void setTtsRate(double rate);
     void setTtsPitch(double pitch);
@@ -125,6 +130,8 @@ signals:
     void whisperModelChanged();
     void wakeWordChanged();
     void continuousModeChanged();
+    void smartRoutingChanged();
+    void fastModelIdChanged();
     void personalityPromptChanged();
     void ttsRateChanged();
     void ttsPitchChanged();
@@ -174,6 +181,8 @@ private:
     QString m_whisperModel{QStringLiteral("tiny")};
     QString m_wakeWord;
     bool m_continuousMode{false};
+    bool m_smartRouting{false};
+    QString m_fastModelId;
     QString m_personalityPrompt;
     double m_ttsRate{0.05};
     double m_ttsPitch{-0.1};

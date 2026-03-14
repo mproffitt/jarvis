@@ -93,6 +93,8 @@ class JarvisBackend : public QObject
 
     // Continuous conversation
     Q_PROPERTY(bool continuousMode READ continuousMode NOTIFY continuousModeChanged)
+    Q_PROPERTY(bool smartRouting READ smartRouting NOTIFY smartRoutingChanged)
+    Q_PROPERTY(QString fastModelId READ fastModelId NOTIFY fastModelIdChanged)
     Q_PROPERTY(bool conversationActive READ isConversationActive NOTIFY conversationActiveChanged)
 
     // OAuth login status
@@ -167,6 +169,8 @@ public:
 
     // Continuous conversation
     [[nodiscard]] bool continuousMode() const { return m_continuousMode; }
+    [[nodiscard]] bool smartRouting() const;
+    [[nodiscard]] QString fastModelId() const;
     [[nodiscard]] bool isConversationActive() const { return m_conversationActive; }
 
     // OAuth (delegated)
@@ -221,6 +225,8 @@ public:
     Q_INVOKABLE void setWhisperModel(const QString &model);
     Q_INVOKABLE void setWakeWord(const QString &word);
     Q_INVOKABLE void setContinuousMode(bool enabled);
+    Q_INVOKABLE void setSmartRouting(bool enabled);
+    Q_INVOKABLE void setFastModelId(const QString &modelId);
     Q_INVOKABLE void stopConversation();
     Q_INVOKABLE void setPersonalityPrompt(const QString &prompt);
     Q_INVOKABLE void cancelDownload();
@@ -283,6 +289,8 @@ signals:
     void wakeWordChanged();
     void personalityPromptChanged();
     void continuousModeChanged();
+    void smartRoutingChanged();
+    void fastModelIdChanged();
     void conversationActiveChanged();
     void oauthStatusChanged();
     void commandMappingsChanged();

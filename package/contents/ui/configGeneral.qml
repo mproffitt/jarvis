@@ -358,6 +358,53 @@ Item {
                 }
             }
 
+            // Smart routing
+            CheckBox {
+                Kirigami.FormData.label: i18n("Smart model routing:")
+                visible: JarvisBackend.llmProvider !== "llamacpp"
+                checked: JarvisBackend.smartRouting
+                onToggled: JarvisBackend.setSmartRouting(checked)
+            }
+
+            ComboBox {
+                id: fastModelCombo
+                Kirigami.FormData.label: i18n("Fast model:")
+                visible: JarvisBackend.smartRouting && JarvisBackend.llmProvider !== "llamacpp"
+                Layout.fillWidth: true
+
+                property var srcChoices: JarvisBackend.llmProvider === "ollama"
+                    ? JarvisBackend.availableLlmModels : JarvisBackend.cloudModelChoices
+
+                model: {
+                    var items = []
+                    var ch = srcChoices
+                    for (var i = 0; i < ch.length; i++)
+                        items.push(ch[i].name + (ch[i].id !== ch[i].name ? "  (" + ch[i].id + ")" : ""))
+                    return items
+                }
+                currentIndex: {
+                    var id = JarvisBackend.fastModelId
+                    var ch = srcChoices
+                    for (var i = 0; i < ch.length; i++)
+                        if (ch[i].id === id) return i
+                    return -1
+                }
+                onActivated: function(index) {
+                    var ch = srcChoices
+                    if (index >= 0 && index < ch.length)
+                        JarvisBackend.setFastModelId(ch[index].id)
+                }
+            }
+
+            Label {
+                visible: JarvisBackend.smartRouting && JarvisBackend.llmProvider !== "llamacpp"
+                text: i18n("Simple queries use the fast model, complex queries use the main model.")
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+                color: Kirigami.Theme.disabledTextColor
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+            }
+
             // Model selector for Ollama (dropdown populated from installed models)
             RowLayout {
                 Kirigami.FormData.label: i18n("Model:")

@@ -159,6 +159,8 @@ void JarvisBackend::connectModuleSignals()
     });
     connect(m_settings, &JarvisSettings::autoStartWakeWordChanged, this, &JarvisBackend::autoStartWakeWordChanged);
     connect(m_settings, &JarvisSettings::whisperModelChanged, this, &JarvisBackend::whisperModelChanged);
+    connect(m_settings, &JarvisSettings::smartRoutingChanged, this, &JarvisBackend::smartRoutingChanged);
+    connect(m_settings, &JarvisSettings::fastModelIdChanged, this, &JarvisBackend::fastModelIdChanged);
     connect(m_settings, &JarvisSettings::wakeWordChanged, this, &JarvisBackend::wakeWordChanged);
     connect(m_settings, &JarvisSettings::personalityPromptChanged, this, &JarvisBackend::personalityPromptChanged);
     connect(m_settings, &JarvisSettings::ttsRateChanged, this, [this]() { m_tts->onTtsRateChanged(); });
@@ -311,6 +313,11 @@ void JarvisBackend::setContinuousMode(bool enabled)
     emit continuousModeChanged();
     if (!enabled) stopConversation();
 }
+
+bool JarvisBackend::smartRouting() const { return m_settings->smartRouting(); }
+QString JarvisBackend::fastModelId() const { return m_settings->fastModelId(); }
+void JarvisBackend::setSmartRouting(bool enabled) { m_settings->setSmartRouting(enabled); }
+void JarvisBackend::setFastModelId(const QString &modelId) { m_settings->setFastModelId(modelId); }
 
 void JarvisBackend::stopConversation()
 {
@@ -568,7 +575,7 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
         requestBody[QStringLiteral("stream")] = true;
 
         if (m_settings->providerNeedsModelInRequest()) {
-            QString modelId = m_settings->llmModelId();
+            QString modelId = m_settings->routeModel(userMessage);
             if (modelId.isEmpty() && m_settings->isClaudeProvider())
                 modelId = QStringLiteral("claude-sonnet-4-20250514");
             if (modelId.isEmpty()) {
