@@ -51,6 +51,7 @@ signals:
     void audioLevelChanged();
     void wakeWordDetected();
     void wakeWordMatch(const QString &word);
+    void ttsInterrupted();
     void voiceCommandModeChanged();
     void lastTranscriptionChanged();
     void voiceCommandTranscribed(const QString &text);

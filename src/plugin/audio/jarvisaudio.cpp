@@ -199,9 +199,13 @@ bool JarvisAudio::isMicBusy() const
 
 void JarvisAudio::setTtsSpeaking(bool speaking)
 {
-    m_ttsSpeaking = speaking;
-    if (speaking) {
-        // Clear audio buffer so we don't process TTS output as speech
+    const bool wasSpeaking = m_ttsSpeaking.exchange(speaking);
+    if (speaking && !wasSpeaking) {
+        // TTS started — clear buffer but keep processing for wake word interruption
+        QMutexLocker lock(&m_audioMutex);
+        m_audioBuffer.clear();
+    } else if (!speaking && wasSpeaking) {
+        // TTS stopped — clear any TTS echo from the buffer
         QMutexLocker lock(&m_audioMutex);
         m_audioBuffer.clear();
     }
@@ -209,7 +213,8 @@ void JarvisAudio::setTtsSpeaking(bool speaking)
 
 void JarvisAudio::processAudioBuffer()
 {
-    if (m_ttsSpeaking.load()) return; // Don't process while TTS is playing
+    // During TTS: still process for wake word interruption, but only check wake word
+    // (skip voice command mode entry from other triggers)
     if (m_micMonitor && m_micMonitor->isMicBusy()) return;
     if (m_voiceCommandMode) return;
     if (!m_wakeWordActive || !m_whisperCtx) return;
@@ -248,7 +253,9 @@ void JarvisAudio::processAudioBuffer()
         m_whisperBusy = false;
 
         if (!matched.isEmpty()) {
-            QMetaObject::invokeMethod(this, [this, matched]() {
+            const bool wasTtsSpeaking = m_ttsSpeaking.load();
+            QMetaObject::invokeMethod(this, [this, matched, wasTtsSpeaking]() {
+                if (wasTtsSpeaking) emit ttsInterrupted();
                 emit wakeWordMatch(matched);
             }, Qt::QueuedConnection);
         }
