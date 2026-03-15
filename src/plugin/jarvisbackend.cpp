@@ -1676,6 +1676,50 @@ void JarvisBackend::checkReminders()
 
 void JarvisBackend::handleScreenContext(const QString &question)
 {
+    // Auto-route to a vision-capable model if needed
+    const QString provider = m_settings->llmProvider();
+    const QString originalModel = m_settings->llmModelId();
+    bool switchedModel = false;
+
+    if (provider == QStringLiteral("ollama")) {
+        // Check if current model supports vision (llava, bakllava, moondream, etc.)
+        static const QStringList visionModels = {
+            QStringLiteral("llava"), QStringLiteral("bakllava"),
+            QStringLiteral("moondream"), QStringLiteral("minicpm-v"),
+            QStringLiteral("llama3.2-vision"),
+        };
+        const QString currentModel = originalModel.toLower();
+        bool isVision = false;
+        for (const auto &vm : visionModels) {
+            if (currentModel.contains(vm)) { isVision = true; break; }
+        }
+
+        if (!isVision) {
+            // Search installed Ollama models for a vision-capable one
+            const auto models = m_settings->availableLlmModels();
+            for (const auto &v : models) {
+                const auto map = v.toMap();
+                const QString id = map[QStringLiteral("id")].toString().toLower();
+                for (const auto &vm : visionModels) {
+                    if (id.contains(vm)) {
+                        m_settings->setLlmModelId(map[QStringLiteral("id")].toString());
+                        switchedModel = true;
+                        qDebug() << "[JARVIS] Auto-switched to vision model:" << map[QStringLiteral("id")].toString();
+                        break;
+                    }
+                }
+                if (switchedModel) break;
+            }
+
+            if (!switchedModel) {
+                speak(QStringLiteral("I don't have a vision model installed. Please install llava in Ollama."));
+                setStatus("No vision model available.");
+                return;
+            }
+        }
+    }
+    // Claude, GPT-4o, Gemini all support vision natively — no switch needed
+
     setStatus("Capturing screen...");
     speak(QStringLiteral("Let me take a look."));
 
@@ -1684,7 +1728,7 @@ void JarvisBackend::handleScreenContext(const QString &question)
     // Capture screenshot using spectacle (KDE) — works on Wayland
     auto *proc = new QProcess(this);
     connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, proc, screenshotPath, question](int exitCode, QProcess::ExitStatus) {
+            this, [this, proc, screenshotPath, question, switchedModel, originalModel](int exitCode, QProcess::ExitStatus) {
         proc->deleteLater();
 
         if (exitCode != 0 || !QFile::exists(screenshotPath)) {
@@ -1800,7 +1844,7 @@ void JarvisBackend::handleScreenContext(const QString &question)
         }
 
         auto *visionReply = m_networkManager->post(request, QJsonDocument(requestBody).toJson());
-        connect(visionReply, &QNetworkReply::finished, this, [this, visionReply]() {
+        connect(visionReply, &QNetworkReply::finished, this, [this, visionReply, switchedModel, originalModel]() {
             visionReply->deleteLater();
 
             if (visionReply->error() != QNetworkReply::NoError) {
@@ -1839,6 +1883,12 @@ void JarvisBackend::handleScreenContext(const QString &question)
             addToChatHistory(QStringLiteral("assistant"), text);
             speak(text);
             setStatus("Ready.");
+
+            // Restore original model if we auto-switched for vision
+            if (switchedModel) {
+                m_settings->setLlmModelId(originalModel);
+                qDebug() << "[JARVIS] Restored model to:" << originalModel;
+            }
         });
     });
 
