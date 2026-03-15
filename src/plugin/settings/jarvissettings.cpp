@@ -1001,6 +1001,7 @@ void JarvisSettings::fetchPiperVoices(const QString &langFilter, const QString &
                 {QStringLiteral("urlJson"), baseUrl + onnxPath + QStringLiteral(".json")},
                 {QStringLiteral("downloaded"), downloaded},
                 {QStringLiteral("active"), active},
+                {QStringLiteral("source"), QStringLiteral("official")},
             });
         }
 
@@ -1078,6 +1079,7 @@ void JarvisSettings::fetchCommunityVoices()
                     {QStringLiteral("urlJson"), baseUrl + fname + QStringLiteral(".json")},
                     {QStringLiteral("downloaded"), downloaded},
                     {QStringLiteral("active"), active},
+                    {QStringLiteral("source"), QStringLiteral("community")},
                 });
                 added = true;
             }

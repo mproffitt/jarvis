@@ -48,8 +48,86 @@ Item {
             }
         }
 
+        RowLayout {
+            Layout.leftMargin: Kirigami.Units.smallSpacing
+            Layout.topMargin: Kirigami.Units.smallSpacing
+            spacing: Kirigami.Units.smallSpacing
+
+            Label { text: i18n("Language:") }
+            ComboBox {
+                id: langFilterCombo
+                model: [
+                    { text: i18n("All Languages"), value: "" },
+                    { text: i18n("English"), value: "en" },
+                    { text: i18n("German"), value: "de" },
+                    { text: i18n("French"), value: "fr" },
+                    { text: i18n("Spanish"), value: "es" },
+                    { text: i18n("Italian"), value: "it" },
+                    { text: i18n("Portuguese"), value: "pt" },
+                    { text: i18n("Polish"), value: "pl" },
+                    { text: i18n("Dutch"), value: "nl" },
+                    { text: i18n("Russian"), value: "ru" },
+                    { text: i18n("Chinese"), value: "zh" },
+                    { text: i18n("Czech"), value: "cs" },
+                    { text: i18n("Finnish"), value: "fi" },
+                    { text: i18n("Hungarian"), value: "hu" },
+                    { text: i18n("Norwegian"), value: "no" },
+                    { text: i18n("Swedish"), value: "sv" },
+                    { text: i18n("Turkish"), value: "tr" },
+                    { text: i18n("Ukrainian"), value: "uk" },
+                    { text: i18n("Vietnamese"), value: "vi" },
+                    { text: i18n("Catalan"), value: "ca" },
+                    { text: i18n("Greek"), value: "el" },
+                    { text: i18n("Arabic"), value: "ar" },
+                    { text: i18n("Korean"), value: "ko" },
+                    { text: i18n("Japanese"), value: "ja" }
+                ]
+                textRole: "text"
+                valueRole: "value"
+                currentIndex: 1
+                onActivated: JarvisBackend.searchVoices(currentValue, qualityFilterCombo.currentValue)
+            }
+
+            Label { text: i18n("Source:") }
+            ComboBox {
+                id: sourceFilterCombo
+                model: [
+                    { text: i18n("All"), value: "" },
+                    { text: i18n("Official"), value: "official" },
+                    { text: i18n("Community"), value: "community" }
+                ]
+                textRole: "text"
+                valueRole: "value"
+                currentIndex: 0
+            }
+
+            Label { text: i18n("Quality:") }
+            ComboBox {
+                id: qualityFilterCombo
+                model: [
+                    { text: i18n("All Qualities"), value: "" },
+                    { text: i18n("High"), value: "high" },
+                    { text: i18n("Medium"), value: "medium" },
+                    { text: i18n("Low"), value: "low" },
+                    { text: i18n("Extra Low"), value: "x_low" }
+                ]
+                textRole: "text"
+                valueRole: "value"
+                currentIndex: 0
+                onActivated: JarvisBackend.searchVoices(langFilterCombo.currentValue, currentValue)
+            }
+        }
+
         Repeater {
-            model: JarvisBackend.availableTtsVoices
+            model: {
+                var all = JarvisBackend.availableTtsVoices
+                var src = sourceFilterCombo.currentValue
+                if (!src || src.length === 0) return all
+                var filtered = []
+                for (var i = 0; i < all.length; i++)
+                    if (all[i].source === src) filtered.push(all[i])
+                return filtered
+            }
             delegate: Kirigami.AbstractCard {
                 Layout.fillWidth: true
                 Layout.leftMargin: Kirigami.Units.smallSpacing
@@ -105,69 +183,6 @@ Item {
                         }
                     }
                 }
-            }
-        }
-
-        RowLayout {
-            Layout.leftMargin: Kirigami.Units.smallSpacing
-            Layout.topMargin: Kirigami.Units.smallSpacing
-            spacing: Kirigami.Units.smallSpacing
-
-            Label {
-                text: i18n("Language:")
-            }
-
-            ComboBox {
-                id: langFilterCombo
-                model: [
-                    { text: i18n("All Languages"), value: "" },
-                    { text: i18n("English"), value: "en" },
-                    { text: i18n("German"), value: "de" },
-                    { text: i18n("French"), value: "fr" },
-                    { text: i18n("Spanish"), value: "es" },
-                    { text: i18n("Italian"), value: "it" },
-                    { text: i18n("Portuguese"), value: "pt" },
-                    { text: i18n("Polish"), value: "pl" },
-                    { text: i18n("Dutch"), value: "nl" },
-                    { text: i18n("Russian"), value: "ru" },
-                    { text: i18n("Chinese"), value: "zh" },
-                    { text: i18n("Czech"), value: "cs" },
-                    { text: i18n("Finnish"), value: "fi" },
-                    { text: i18n("Hungarian"), value: "hu" },
-                    { text: i18n("Norwegian"), value: "no" },
-                    { text: i18n("Swedish"), value: "sv" },
-                    { text: i18n("Turkish"), value: "tr" },
-                    { text: i18n("Ukrainian"), value: "uk" },
-                    { text: i18n("Vietnamese"), value: "vi" },
-                    { text: i18n("Catalan"), value: "ca" },
-                    { text: i18n("Greek"), value: "el" },
-                    { text: i18n("Arabic"), value: "ar" },
-                    { text: i18n("Korean"), value: "ko" },
-                    { text: i18n("Japanese"), value: "ja" }
-                ]
-                textRole: "text"
-                valueRole: "value"
-                currentIndex: 1  // Default to English
-                onActivated: JarvisBackend.searchVoices(currentValue, qualityFilterCombo.currentValue)
-            }
-
-            Label {
-                text: i18n("Quality:")
-            }
-
-            ComboBox {
-                id: qualityFilterCombo
-                model: [
-                    { text: i18n("All Qualities"), value: "" },
-                    { text: i18n("High"), value: "high" },
-                    { text: i18n("Medium"), value: "medium" },
-                    { text: i18n("Low"), value: "low" },
-                    { text: i18n("Extra Low"), value: "x_low" }
-                ]
-                textRole: "text"
-                valueRole: "value"
-                currentIndex: 0
-                onActivated: JarvisBackend.searchVoices(langFilterCombo.currentValue, currentValue)
             }
         }
 
