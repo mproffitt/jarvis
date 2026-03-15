@@ -54,9 +54,9 @@ JarvisBackend::JarvisBackend(QObject *parent)
     m_conversationTimeout->setSingleShot(true);
     m_conversationTimeout->setInterval(30000);
     connect(m_conversationTimeout, &QTimer::timeout, this, [this]() {
-        if (m_conversationActive) {
+        if (m_conversationActive && !m_processing && !m_tts->isSpeaking()
+            && !m_audio->isVoiceCommandMode()) {
             stopConversation();
-            speak(QStringLiteral("Conversation timed out. I'll be here if you need me."));
         }
     });
 
@@ -179,6 +179,8 @@ void JarvisBackend::connectModuleSignals()
         // Continuous conversation: re-enter voice command mode after TTS finishes
         if (!m_tts->isSpeaking() && m_conversationActive
             && !m_processing && !m_audio->isVoiceCommandMode()) {
+            // Start inactivity timeout now — the assistant is done speaking
+            if (m_conversationTimeout) m_conversationTimeout->start();
             QTimer::singleShot(300, this, [this]() {
                 // Double-check everything is truly idle before re-entering
                 if (m_conversationActive && !m_processing
@@ -504,7 +506,10 @@ void JarvisBackend::openUrl(const QString &url)
 
 void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
 {
-    if (text.isEmpty()) {
+    // Treat empty or very short transcriptions as silence/hallucination
+    const QString trimmed = text.trimmed();
+    const int wordCount = trimmed.split(QLatin1Char(' '), Qt::SkipEmptyParts).size();
+    if (trimmed.isEmpty() || (m_conversationActive && wordCount <= 1)) {
         if (m_conversationActive) {
             ++m_emptyTranscriptionCount;
             if (m_emptyTranscriptionCount >= 2) {
@@ -513,7 +518,7 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
             }
             // Re-listen silently
             m_audio->startVoiceCommand();
-        } else {
+        } else if (trimmed.isEmpty()) {
             setStatus("I couldn't make out what you said.");
         }
         return;
@@ -538,8 +543,8 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
                 return;
             }
         }
-        // Reset conversation timeout
-        if (m_conversationTimeout) m_conversationTimeout->start();
+        // Stop the timeout while processing — it restarts when TTS finishes
+        if (m_conversationTimeout) m_conversationTimeout->stop();
     }
 
     // Remove wake word from transcription if present
