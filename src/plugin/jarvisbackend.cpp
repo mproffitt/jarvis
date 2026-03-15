@@ -763,14 +763,17 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
                 "The user wants to listen to: %1\n"
                 "Respond with ONLY a Spotify search query — artist and/or song name. "
                 "Nothing else, no explanation, no punctuation, just the search term. "
-                "If the request is vague like 'some jazz', pick a specific well-known artist or track.").arg(query);
+                "If the request is vague like 'some jazz', pick a specific artist or track. "
+                "Be creative and diverse — pick something different every time. "
+                "Don't always suggest the most famous artist in a genre. "
+                "Mix well-known and lesser-known artists across decades and subgenres.").arg(query);
 
             QJsonObject body;
             body[QStringLiteral("messages")] = QJsonArray{
                 QJsonObject{{QStringLiteral("role"), QStringLiteral("user")},
                             {QStringLiteral("content"), prompt}}};
             body[QStringLiteral("max_tokens")] = 50;
-            body[QStringLiteral("temperature")] = 0.9;
+            body[QStringLiteral("temperature")] = 1.3;
             body[QStringLiteral("stream")] = false;
 
             const QString modelId = m_settings->llmModelId();
