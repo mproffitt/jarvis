@@ -30,12 +30,17 @@ BuildRequires:  cmake(Qt6DBus) >= 6.0
 BuildRequires:  git
 Requires:       kf6-kwallet%{?_isa}
 Requires:       kf6-plasma%{?_isa}
+Requires:       kf6-ki18n%{?_isa}
+Requires:       kf6-baloo%{?_isa}
 Requires:       qt6-qtbase%{?_isa}
 Requires:       qt6-qtdeclarative%{?_isa}
+Requires:       qt6-qtmultimedia%{?_isa}
+Requires:       qt6-qtspeech%{?_isa}
 Requires:       pipewire
+Requires:       pipewire-utils
 Requires:       rnnoise
-Recommends:     xdotool
-Recommends:     playerctl
+Requires:       whisper-cpp
+Recommends:     ydotool
 Suggests:       llama-cpp
 Suggests:       ollama
 
