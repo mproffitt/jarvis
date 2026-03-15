@@ -8,6 +8,21 @@ ConfigModel {
         source: "configGeneral.qml"
     }
     ConfigCategory {
+        name: i18n("Voice")
+        icon: "preferences-desktop-text-to-speech"
+        source: "configVoice.qml"
+    }
+    ConfigCategory {
+        name: i18n("Audio")
+        icon: "audio-headset"
+        source: "configAudio.qml"
+    }
+    ConfigCategory {
+        name: i18n("Chat")
+        icon: "dialog-messages"
+        source: "configChat.qml"
+    }
+    ConfigCategory {
         name: i18n("Voice Commands")
         icon: "dialog-scripts"
         source: "configCommands.qml"

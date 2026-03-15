@@ -1,7 +1,6 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
-import Qt.labs.platform 1.1 as Labs
 import org.kde.kirigami 2.20 as Kirigami
 import org.kde.plasma.jarvis 1.0
 
@@ -10,6 +9,7 @@ Item {
     property string title: i18n("General")
     width: parent ? parent.width : 0
     height: parent ? parent.height : 0
+    clip: true
 
     ScrollView {
         id: configRoot
@@ -54,6 +54,7 @@ Item {
         // LLM PROVIDER
         // ════════════════════════════════════════
         Kirigami.FormLayout {
+            Component.onCompleted: { for (var i = 0; i < children.length; i++) { if (children[i].hasOwnProperty("columns")) { children[i].anchors.horizontalCenter = undefined; children[i].anchors.left = left; children[i].anchors.leftMargin = Qt.binding(function() { return Kirigami.Units.smallSpacing; }); } } }
             Layout.fillWidth: true
 
             Kirigami.Separator {
@@ -118,6 +119,7 @@ Item {
                     placeholderText: i18n("sk-...")
                     echoMode: TextInput.Password
                     Layout.fillWidth: true
+                    implicitWidth: Kirigami.Units.gridUnit * 12
                     onAccepted: JarvisBackend.setOpenaiApiKey(text)
                 }
                 Button {
@@ -138,6 +140,7 @@ Item {
                     placeholderText: i18n("AIza... (optional if logged in)")
                     echoMode: TextInput.Password
                     Layout.fillWidth: true
+                    implicitWidth: Kirigami.Units.gridUnit * 12
                     onAccepted: JarvisBackend.setGeminiApiKey(text)
                 }
                 Button {
@@ -188,6 +191,7 @@ Item {
                     placeholderText: i18n("sk-ant-... (optional if logged in)")
                     echoMode: TextInput.Password
                     Layout.fillWidth: true
+                    implicitWidth: Kirigami.Units.gridUnit * 12
                     onAccepted: JarvisBackend.setClaudeApiKey(text)
                 }
                 Button {
@@ -246,6 +250,7 @@ Item {
                         id: claudeCodeField
                         placeholderText: i18n("Paste authorization code here...")
                         Layout.fillWidth: true
+                        implicitWidth: Kirigami.Units.gridUnit * 12
                         onAccepted: {
                             if (text.length > 0) {
                                 JarvisBackend.completeClaudeLogin(text)
@@ -349,6 +354,7 @@ Item {
                     text: JarvisBackend.llmModelId
                     placeholderText: i18n("Enter model ID...")
                     Layout.fillWidth: true
+                    implicitWidth: Kirigami.Units.gridUnit * 12
                     onAccepted: JarvisBackend.setLlmModelId(text)
                 }
                 Button {
@@ -501,6 +507,7 @@ Item {
         // LLM MODELS (llama.cpp GGUF download)
         // ════════════════════════════════════════
         Kirigami.FormLayout {
+            Component.onCompleted: { for (var i = 0; i < children.length; i++) { if (children[i].hasOwnProperty("columns")) { children[i].anchors.horizontalCenter = undefined; children[i].anchors.left = left; children[i].anchors.leftMargin = Qt.binding(function() { return Kirigami.Units.smallSpacing; }); } } }
             Layout.fillWidth: true
             visible: JarvisBackend.llmProvider === "llamacpp"
 
@@ -567,378 +574,6 @@ Item {
             Layout.leftMargin: Kirigami.Units.largeSpacing
             Layout.topMargin: Kirigami.Units.smallSpacing
             onClicked: JarvisBackend.fetchMoreModels()
-        }
-
-
-        // ════════════════════════════════════════
-        // TTS VOICES
-        // ════════════════════════════════════════
-        Kirigami.FormLayout {
-            Layout.fillWidth: true
-
-            Kirigami.Separator {
-                Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18n("TTS Voices (Piper)")
-            }
-
-            Label {
-                text: i18n("Choose a voice for speech synthesis. Download a voice, then press Play to preview it.")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-            }
-
-            Label {
-                Kirigami.FormData.label: i18n("Active voice:")
-                text: JarvisBackend.currentVoiceName || i18n("None")
-                font.bold: true
-            }
-        }
-
-        Repeater {
-            model: JarvisBackend.availableTtsVoices
-            delegate: Kirigami.AbstractCard {
-                Layout.fillWidth: true
-                Layout.leftMargin: Kirigami.Units.smallSpacing
-                Layout.rightMargin: Kirigami.Units.smallSpacing
-                contentItem: RowLayout {
-                    spacing: Kirigami.Units.largeSpacing
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 2
-                        RowLayout {
-                            spacing: Kirigami.Units.smallSpacing
-                            Label {
-                                text: modelData.name
-                                font.bold: true
-                            }
-                            Label {
-                                text: modelData.lang
-                                color: Kirigami.Theme.disabledTextColor
-                                font.pointSize: Kirigami.Theme.smallFont.pointSize
-                            }
-                            Kirigami.Icon {
-                                visible: modelData.active
-                                source: "emblem-default"
-                                implicitWidth: Kirigami.Units.iconSizes.small
-                                implicitHeight: Kirigami.Units.iconSizes.small
-                            }
-                        }
-                        Label {
-                            text: modelData.desc
-                            color: Kirigami.Theme.disabledTextColor
-                            font.pointSize: Kirigami.Theme.smallFont.pointSize
-                            Layout.fillWidth: true
-                            wrapMode: Text.Wrap
-                        }
-                    }
-                    Button {
-                        visible: modelData.downloaded
-                        text: i18n("Play")
-                        icon.name: "media-playback-start"
-                        flat: true
-                        ToolTip.text: i18n("Preview this voice")
-                        ToolTip.visible: hovered
-                        onClicked: JarvisBackend.testVoice(modelData.id)
-                    }
-                    Button {
-                        text: modelData.active ? i18n("Active") : (modelData.downloaded ? i18n("Activate") : i18n("Download"))
-                        icon.name: modelData.active ? "checkmark" : (modelData.downloaded ? "media-playback-start" : "download")
-                        enabled: !modelData.active && !JarvisBackend.downloading
-                        highlighted: modelData.active
-                        onClicked: {
-                            if (modelData.downloaded) JarvisBackend.setActiveTtsVoice(modelData.id)
-                            else JarvisBackend.downloadTtsVoice(modelData.id)
-                        }
-                    }
-                }
-            }
-        }
-
-        Button {
-            text: i18n("Fetch More Voices")
-            icon.name: "list-add"
-            Layout.leftMargin: Kirigami.Units.largeSpacing
-            Layout.topMargin: Kirigami.Units.smallSpacing
-            onClicked: JarvisBackend.fetchMoreVoices()
-        }
-
-        // ════════════════════════════════════════
-        // VOICE SYNTHESIS SETTINGS
-        // ════════════════════════════════════════
-        Kirigami.FormLayout {
-            Layout.fillWidth: true
-
-            Kirigami.Separator {
-                Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18n("Voice Synthesis Settings")
-            }
-
-            Slider {
-                id: rateSlider
-                Kirigami.FormData.label: i18n("Speech rate: %1", value.toFixed(2))
-                from: -1.0; to: 1.0; stepSize: 0.05
-                value: 0.05
-                onMoved: JarvisBackend.setTtsRate(value)
-            }
-
-            Slider {
-                id: pitchSlider
-                Kirigami.FormData.label: i18n("Speech pitch: %1", value.toFixed(2))
-                from: -1.0; to: 1.0; stepSize: 0.05
-                value: -0.1
-                onMoved: JarvisBackend.setTtsPitch(value)
-            }
-
-            Slider {
-                id: volumeSlider
-                Kirigami.FormData.label: i18n("Volume: %1%", (value * 100).toFixed(0))
-                from: 0.0; to: 1.0; stepSize: 0.05
-                value: 0.85
-                onMoved: JarvisBackend.setTtsVolume(value)
-            }
-
-            Button {
-                text: i18n("Test Current Voice")
-                icon.name: "media-playback-start"
-                onClicked: JarvisBackend.testVoice(JarvisBackend.currentVoiceName)
-            }
-        }
-
-        // ════════════════════════════════════════
-        // WAKE WORD & AUDIO
-        // ════════════════════════════════════════
-        Kirigami.FormLayout {
-            Layout.fillWidth: true
-
-            Kirigami.Separator {
-                Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18n("Wake Word & Audio")
-            }
-
-            RowLayout {
-                Kirigami.FormData.label: i18n("Wake word:")
-                spacing: Kirigami.Units.smallSpacing
-                TextField {
-                    id: wakeWordField
-                    text: JarvisBackend.wakeWord
-                    placeholderText: i18n("jarvis")
-                    Layout.fillWidth: true
-                    onAccepted: JarvisBackend.setWakeWord(text)
-                }
-                Button {
-                    text: i18n("Apply")
-                    icon.name: "dialog-ok-apply"
-                    onClicked: JarvisBackend.setWakeWord(wakeWordField.text)
-                }
-            }
-
-            ComboBox {
-                Kirigami.FormData.label: i18n("Whisper model:")
-                model: [
-                    { value: "tiny",  text: "Tiny (75MB — fastest, least accurate)" },
-                    { value: "base",  text: "Base (142MB — good balance)" },
-                    { value: "small", text: "Small (466MB — best accuracy)" }
-                ]
-                textRole: "text"
-                valueRole: "value"
-                currentIndex: {
-                    var m = JarvisBackend.whisperModel
-                    for (var i = 0; i < model.length; i++)
-                        if (model[i].value === m) return i
-                    return 0
-                }
-                onActivated: JarvisBackend.setWhisperModel(currentValue)
-            }
-
-            Label {
-                text: i18n("Requires restart. Download models from huggingface.co/ggerganov/whisper.cpp and place in ~/.local/share/jarvis/")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-            }
-
-            CheckBox {
-                Kirigami.FormData.label: i18n("Auto-start wake word detection:")
-                checked: JarvisBackend.autoStartWakeWord
-                onToggled: JarvisBackend.setAutoStartWakeWord(checked)
-            }
-
-            CheckBox {
-                Kirigami.FormData.label: i18n("Noise suppression (RNNoise):")
-                checked: JarvisBackend.noiseSuppression
-                onToggled: JarvisBackend.setNoiseSuppression(checked)
-            }
-
-            CheckBox {
-                Kirigami.FormData.label: i18n("Continuous conversation mode:")
-                checked: JarvisBackend.continuousMode
-                onToggled: JarvisBackend.setContinuousMode(checked)
-            }
-
-            Label {
-                visible: JarvisBackend.continuousMode
-                text: i18n("After the wake word, the mic stays open for back-and-forth conversation. Say \"stop\", \"goodbye\", or \"thank you\" to end.")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-            }
-
-            Label {
-                text: i18n("Say the wake word to activate voice commands without clicking.")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-            }
-
-            Slider {
-                id: voiceCmdSlider
-                Kirigami.FormData.label: i18n("Max voice command length: %1 seconds", value.toFixed(0))
-                from: 3; to: 30; stepSize: 1
-                value: JarvisBackend.voiceCmdMaxSeconds
-                onMoved: JarvisBackend.setVoiceCmdMaxSeconds(value)
-            }
-
-            Slider {
-                id: silenceSlider
-                Kirigami.FormData.label: i18n("Silence timeout: %1 ms", value.toFixed(0))
-                from: 200; to: 3000; stepSize: 80
-                value: JarvisBackend.silenceTimeoutMs
-                onMoved: JarvisBackend.setSilenceTimeoutMs(value)
-            }
-
-            Label {
-                text: i18n("How long to wait after you stop speaking before processing. Lower = faster response, higher = fewer false stops.")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-            }
-        }
-
-        // ════════════════════════════════════════
-        // CHAT SETTINGS
-        // ════════════════════════════════════════
-        Kirigami.FormLayout {
-            Layout.fillWidth: true
-
-            Kirigami.Separator {
-                Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18n("Chat Settings")
-            }
-
-            Slider {
-                id: historySlider
-                Kirigami.FormData.label: i18n("Conversation memory: %1 message pairs", value.toFixed(0))
-                from: 5; to: 100; stepSize: 5
-                value: JarvisBackend.maxHistoryPairs
-                onMoved: JarvisBackend.setMaxHistoryPairs(value)
-            }
-
-            Label {
-                text: i18n("More pairs = better context memory but slower responses and more RAM usage.")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-            }
-
-            RowLayout {
-                Kirigami.FormData.label: i18n("History:")
-                spacing: Kirigami.Units.smallSpacing
-                Button {
-                    text: i18n("Export")
-                    icon.name: "document-save"
-                    onClicked: exportDialog.open()
-                }
-                Button {
-                    text: i18n("Import")
-                    icon.name: "document-open"
-                    onClicked: importDialog.open()
-                }
-            }
-        }
-
-        // File dialogs for export/import (declared at page level)
-        Loader {
-            id: exportDialogLoader
-            active: false
-            sourceComponent: Component {
-                Labs.FileDialog {
-                    id: exportDlg
-                    title: i18n("Export Chat History")
-                    fileMode: Labs.FileDialog.SaveFile
-                    nameFilters: ["JSON files (*.json)"]
-                    currentFile: "file:///tmp/jarvis_history.json"
-                    onAccepted: { JarvisBackend.exportHistory(selectedFile.toString().replace("file://", "")); exportDialogLoader.active = false }
-                    onRejected: exportDialogLoader.active = false
-                    Component.onCompleted: open()
-                }
-            }
-        }
-        Loader {
-            id: importDialogLoader
-            active: false
-            sourceComponent: Component {
-                Labs.FileDialog {
-                    id: importDlg
-                    title: i18n("Import Chat History")
-                    fileMode: Labs.FileDialog.OpenFile
-                    nameFilters: ["JSON files (*.json)"]
-                    onAccepted: { JarvisBackend.importHistory(selectedFile.toString().replace("file://", "")); importDialogLoader.active = false }
-                    onRejected: importDialogLoader.active = false
-                    Component.onCompleted: open()
-                }
-            }
-        }
-
-        QtObject {
-            id: exportDialog
-            function open() { exportDialogLoader.active = true }
-        }
-        QtObject {
-            id: importDialog
-            function open() { importDialogLoader.active = true }
-        }
-
-        // ════════════════════════════════════════
-        // PERSONALITY
-        // ════════════════════════════════════════
-        Kirigami.FormLayout {
-            Layout.fillWidth: true
-
-            Kirigami.Separator {
-                Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18n("AI Personality")
-            }
-
-            Label {
-                text: i18n("Customize the system prompt to change how J.A.R.V.I.S. behaves. Leave empty for the default J.A.R.V.I.S. personality.")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-            }
-
-            TextArea {
-                id: personalityField
-                Kirigami.FormData.label: i18n("System prompt:")
-                text: JarvisBackend.personalityPrompt
-                placeholderText: i18n("Default: J.A.R.V.I.S. from Iron Man — polite, witty, British humor...")
-                Layout.fillWidth: true
-                Layout.preferredHeight: 120
-                wrapMode: TextEdit.Wrap
-            }
-
-            Button {
-                text: i18n("Save Personality")
-                icon.name: "document-save"
-                onClicked: JarvisBackend.setPersonalityPrompt(personalityField.text)
-            }
         }
 
         // Bottom spacer
