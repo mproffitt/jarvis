@@ -217,6 +217,7 @@ public:
     Q_INVOKABLE void setClaudeApiKey(const QString &key);
     Q_INVOKABLE void setLlmModelId(const QString &modelId);
     Q_INVOKABLE void refreshOllamaModels();
+    Q_INVOKABLE void pullOllamaModel(const QString &modelName);
     Q_INVOKABLE void refreshCloudModels();
     Q_INVOKABLE void downloadLlmModel(const QString &modelId);
     Q_INVOKABLE void downloadTtsVoice(const QString &voiceId);

@@ -382,6 +382,61 @@ void JarvisBackend::refreshOllamaModels()
     emit availableLlmModelsChanged();
 }
 
+void JarvisBackend::pullOllamaModel(const QString &modelName)
+{
+    if (modelName.isEmpty()) return;
+
+    m_settings->setDownloading(true);
+    m_settings->setDownloadStatus(QStringLiteral("Pulling %1...").arg(modelName));
+    m_settings->setDownloadProgress(0.0);
+
+    const QUrl url(m_settings->llmServerUrl() + QStringLiteral("/api/pull"));
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    request.setTransferTimeout(0); // No timeout — pulls can take a while
+
+    QJsonObject body;
+    body[QStringLiteral("name")] = modelName;
+
+    auto *reply = m_networkManager->post(request, QJsonDocument(body).toJson());
+
+    // Ollama streams progress as JSON lines
+    connect(reply, &QNetworkReply::readyRead, this, [this, reply]() {
+        const QByteArray data = reply->readAll();
+        const auto lines = data.split('\n');
+        for (const auto &line : lines) {
+            if (line.trimmed().isEmpty()) continue;
+            const auto doc = QJsonDocument::fromJson(line);
+            if (doc.isNull()) continue;
+            const auto obj = doc.object();
+
+            const QString status = obj[QStringLiteral("status")].toString();
+            const qint64 total = obj[QStringLiteral("total")].toVariant().toLongLong();
+            const qint64 completed = obj[QStringLiteral("completed")].toVariant().toLongLong();
+
+            if (total > 0) {
+                m_settings->setDownloadProgress(static_cast<double>(completed) / total);
+                m_settings->setDownloadStatus(QStringLiteral("%1: %2 / %3 MB")
+                    .arg(status).arg(completed / 1048576).arg(total / 1048576));
+            } else {
+                m_settings->setDownloadStatus(status);
+            }
+        }
+    });
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, modelName]() {
+        reply->deleteLater();
+        m_settings->setDownloading(false);
+
+        if (reply->error() == QNetworkReply::NoError) {
+            m_settings->setDownloadStatus(QStringLiteral("Pulled %1 successfully!").arg(modelName));
+            refreshOllamaModels();
+        } else {
+            m_settings->setDownloadStatus(QStringLiteral("Pull failed: %1").arg(reply->errorString()));
+        }
+    });
+}
+
 void JarvisBackend::refreshCloudModels()
 {
     m_settings->fetchCloudModels();

@@ -45,6 +45,9 @@ public:
     [[nodiscard]] double downloadProgress() const { return m_downloadProgress; }
     [[nodiscard]] bool isDownloading() const { return m_downloading; }
     [[nodiscard]] QString downloadStatus() const { return m_downloadStatus; }
+    void setDownloadProgress(double p) { m_downloadProgress = p; emit downloadProgressChanged(); }
+    void setDownloading(bool d) { m_downloading = d; emit downloadingChanged(); }
+    void setDownloadStatus(const QString &s) { m_downloadStatus = s; emit downloadStatusChanged(); }
     [[nodiscard]] int maxHistoryPairs() const { return m_maxHistoryPairs; }
     [[nodiscard]] int contextTokenLimit() const;
     [[nodiscard]] int wakeBufferSeconds() const { return m_wakeBufferSeconds; }

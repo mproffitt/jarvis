@@ -449,6 +449,30 @@ Item {
             }
 
             RowLayout {
+                Kirigami.FormData.label: i18n("Pull model:")
+                visible: JarvisBackend.llmProvider === "ollama"
+                spacing: Kirigami.Units.smallSpacing
+                TextField {
+                    id: ollamaPullField
+                    placeholderText: i18n("e.g. llava:latest")
+                    Layout.fillWidth: true
+                    implicitWidth: Kirigami.Units.gridUnit * 12
+                    enabled: !JarvisBackend.downloading
+                    onAccepted: {
+                        if (text.length > 0) {
+                            JarvisBackend.pullOllamaModel(text)
+                        }
+                    }
+                }
+                Button {
+                    text: i18n("Pull")
+                    icon.name: "download"
+                    enabled: ollamaPullField.text.length > 0 && !JarvisBackend.downloading
+                    onClicked: JarvisBackend.pullOllamaModel(ollamaPullField.text)
+                }
+            }
+
+            RowLayout {
                 Kirigami.FormData.label: i18n("Status:")
                 spacing: Kirigami.Units.smallSpacing
                 Kirigami.Icon {
