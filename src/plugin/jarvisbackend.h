@@ -8,6 +8,7 @@
 #include <QNetworkReply>
 #include <QTimer>
 #include <QJsonArray>
+#include <QJsonValue>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QDateTime>
@@ -20,6 +21,7 @@ class JarvisAudio;
 class JarvisSystem;
 class JarvisCommands;
 class JarvisRag;
+class JarvisMcp;
 
 class JarvisBackend : public QObject
 {
@@ -325,6 +327,7 @@ private:
     void handleScreenContext(const QString &question);
     void saveChatHistory();
     void loadChatHistory();
+    void continueAfterToolCall();
 
     static constexpr auto JARVIS_SYSTEM_PROMPT =
         "You are a friendly, helpful AI voice assistant running on a Linux desktop.\n"
@@ -380,6 +383,8 @@ private:
     QString stripActionsFromResponse(const QString &responseText) const;
     QString expandPath(const QString &path) const;
 
+    static constexpr int MAX_TOOL_CALL_LOOPS = 10;
+
     // Module instances (owned)
     JarvisSettings *m_settings{nullptr};
     JarvisTts *m_tts{nullptr};
@@ -387,6 +392,7 @@ private:
     JarvisSystem *m_system{nullptr};
     JarvisCommands *m_commands{nullptr};
     JarvisRag *m_rag{nullptr};
+    JarvisMcp *m_mcp{nullptr};
 
     // Network
     QNetworkAccessManager *m_networkManager{nullptr};
@@ -408,6 +414,7 @@ private:
     QString m_spokenSoFar;
     QString m_pendingOAuthMessage;
     QString m_currentRagContext;
+    int m_toolCallLoopCount{0};
 
     // Continuous conversation
     bool m_continuousMode{false};
@@ -418,7 +425,7 @@ private:
     // Conversation
     struct ChatMessage {
         QString role;
-        QString content;
+        QJsonValue content;  // QString (plain text) or QJsonArray (tool_use/tool_result blocks)
     };
     std::vector<ChatMessage> m_conversationHistory;
 

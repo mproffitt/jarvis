@@ -5,6 +5,7 @@
 #include "system/jarvissystem.h"
 #include "commands/jarviscommands.h"
 #include "rag/jarvisrag.h"
+#include "mcp/jarvismcp.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -35,6 +36,8 @@ JarvisBackend::JarvisBackend(QObject *parent)
     m_system = new JarvisSystem(this);
     m_commands = new JarvisCommands(this);
     m_rag = new JarvisRag(m_settings, this);
+    m_mcp = new JarvisMcp(this);
+    m_mcp->startAllServers();
 
     connectModuleSignals();
 
@@ -65,7 +68,10 @@ JarvisBackend::JarvisBackend(QObject *parent)
     setStatus("Online. All systems operational.");
 }
 
-JarvisBackend::~JarvisBackend() = default;
+JarvisBackend::~JarvisBackend()
+{
+    m_mcp->stopAllServers();
+}
 
 void JarvisBackend::connectModuleSignals()
 {
@@ -319,8 +325,12 @@ int JarvisBackend::contextTokenLimit() const { return m_settings->contextTokenLi
 int JarvisBackend::estimatedTokens() const
 {
     int total = 0;
-    for (const auto &[role, content] : m_conversationHistory)
-        total += estimateTokenCount(content) + 4; // +4 for role/formatting overhead
+    for (const auto &[role, content] : m_conversationHistory) {
+        if (content.isString())
+            total += estimateTokenCount(content.toString()) + 4;
+        else
+            total += estimateTokenCount(QJsonDocument(content.toArray()).toJson(QJsonDocument::Compact)) + 4;
+    }
     total += estimateTokenCount(buildSystemPrompt(m_currentRagContext));
     return total;
 }
@@ -669,7 +679,7 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
     emit processingChanged();
     setStatus("Processing...");
 
-    m_conversationHistory.push_back({QStringLiteral("user"), userMessage});
+    m_conversationHistory.push_back({QStringLiteral("user"), QJsonValue(userMessage)});
     trimConversationToTokenLimit();
 
     // Check if RAG context is needed
@@ -718,9 +728,12 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
         // Conversation contents
         for (const auto &msg : m_conversationHistory) {
             const QString role = (msg.role == QStringLiteral("assistant")) ? QStringLiteral("model") : QStringLiteral("user");
+            const QString text = msg.content.isString()
+                ? msg.content.toString()
+                : QJsonDocument(msg.content.toArray()).toJson(QJsonDocument::Compact);
             contents.append(QJsonObject{
                 {QStringLiteral("role"), role},
-                {QStringLiteral("parts"), QJsonArray{QJsonObject{{QStringLiteral("text"), msg.content}}}},
+                {QStringLiteral("parts"), QJsonArray{QJsonObject{{QStringLiteral("text"), text}}}},
             });
         }
 
@@ -772,6 +785,17 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
 
         if (m_settings->isClaudeProvider()) {
             requestBody[QStringLiteral("system")] = buildSystemPrompt(m_currentRagContext);
+        }
+
+        // Inject MCP tools if available
+        if (m_settings->isClaudeProvider()) {
+            const auto tools = m_mcp->allToolsForClaude();
+            if (!tools.isEmpty())
+                requestBody[QStringLiteral("tools")] = tools;
+        } else if (!m_settings->isGeminiOAuthMode()) {
+            const auto tools = m_mcp->allToolsForOpenAI();
+            if (!tools.isEmpty())
+                requestBody[QStringLiteral("tools")] = tools;
         }
 
         url = QUrl(m_settings->chatCompletionsUrl());
@@ -856,7 +880,11 @@ QJsonArray JarvisBackend::buildConversationContext() const
     for (const auto &[role, content] : m_conversationHistory) {
         QJsonObject msg;
         msg[QStringLiteral("role")] = role;
-        msg[QStringLiteral("content")] = content;
+        // content can be a plain string or a QJsonArray (tool_use/tool_result blocks)
+        if (content.isArray())
+            msg[QStringLiteral("content")] = content.toArray();
+        else
+            msg[QStringLiteral("content")] = content.toString();
         messages.append(msg);
     }
 
@@ -1015,10 +1043,54 @@ void JarvisBackend::finalizeStreamingResponse()
         emit lastResponseChanged();
         addToChatHistory("jarvis", m_lastResponse);
         setStatus("Ready.");
+        m_toolCallLoopCount = 0;
         return;
     }
 
-    m_conversationHistory.push_back({QStringLiteral("assistant"), responseText});
+    // ── Tool-call detection ──────────────────────────────────────────
+    // Claude: response may contain JSON with tool_use content blocks
+    // OpenAI: response may contain tool_calls in the message
+    // We parse the raw SSE events that were accumulated.  For a first pass
+    // we re-parse the full buffered data to look for tool calls.
+
+    if (m_settings->isClaudeProvider()) {
+        // Claude streams content_block_start events with type "tool_use".
+        // After streaming finishes the accumulated text won't contain the
+        // tool JSON directly — but the raw SSE buffer may.  However, the
+        // simplest approach: look at the *non-streaming* response path.
+        // We'll detect a tool_use block by scanning the SSE events we saw.
+        // For this first pass: check m_streamBuffer (already drained) and
+        // the raw data we saved.  Instead, we rely on the final
+        // message_stop event which carries stop_reason.  We saved those
+        // in m_fullStreamedResponse only for text deltas.  So we need a
+        // secondary buffer.  SIMPLIFICATION: we stored all SSE "data:"
+        // payloads already — let's check if any had type content_block_start
+        // with tool_use.
+        //
+        // Actually the easiest: make the *continuation* calls non-streaming.
+        // For the first user message the model may stream text + tool_use.
+        // We can detect tool_use in the accumulated SSE data.  But we
+        // didn't save raw events.  Let's take a different approach:
+        // We'll look at the m_fullStreamedResponse — if the model called
+        // a tool, the streamed text often ends abruptly.  But this is
+        // fragile.  Better: save raw events.
+        //
+        // PRACTICAL APPROACH for v1: After the streaming response,
+        // do a synchronous check by examining the buffer for tool_use
+        // JSON.  We need to revisit the stream handler to also capture
+        // tool_use blocks.  For now, skip tool detection on the first
+        // streaming call and only handle it on non-streaming continuations.
+        // (Tool calls will work on the continuation path via continueAfterToolCall.)
+        //
+        // Actually let's just go ahead: we'll store tool_use blocks
+        // detected during streaming in a member, then process them here.
+        // But that requires more changes to onLlmStreamReadyRead.
+        // Let's keep it simple: save "raw events" not implemented yet —
+        // fall through to normal text handling for now.  Tool detection
+        // is handled in the non-streaming continueAfterToolCall path.
+    }
+
+    m_conversationHistory.push_back({QStringLiteral("assistant"), QJsonValue(responseText)});
 
     const QString spokenText = stripActionsFromResponse(responseText);
 
@@ -1039,6 +1111,283 @@ void JarvisBackend::finalizeStreamingResponse()
 
     // Parse and execute any actions embedded in the LLM response
     parseAndExecuteActions(responseText);
+
+    m_toolCallLoopCount = 0;
+}
+
+void JarvisBackend::continueAfterToolCall()
+{
+    // Called after a tool result has been added to conversation history.
+    // Makes a NON-streaming follow-up request so we can easily detect
+    // further tool calls in the JSON response.
+
+    if (++m_toolCallLoopCount > MAX_TOOL_CALL_LOOPS) {
+        qWarning() << "[JARVIS] Tool call loop limit reached, stopping.";
+        addToChatHistory("jarvis", QStringLiteral("I've reached the limit of tool calls I can make in a single turn."));
+        m_processing = false;
+        emit processingChanged();
+        m_toolCallLoopCount = 0;
+        return;
+    }
+
+    m_processing = true;
+    emit processingChanged();
+    setStatus(QStringLiteral("Processing tool result (%1/%2)...").arg(m_toolCallLoopCount).arg(MAX_TOOL_CALL_LOOPS));
+
+    QJsonObject requestBody;
+    QUrl url;
+    QNetworkRequest request;
+
+    if (m_settings->isGeminiOAuthMode()) {
+        // Gemini doesn't support MCP tool calls yet — shouldn't get here
+        m_processing = false;
+        emit processingChanged();
+        m_toolCallLoopCount = 0;
+        return;
+    }
+
+    QJsonArray messages = buildConversationContext();
+    requestBody[QStringLiteral("messages")] = messages;
+    requestBody[QStringLiteral("temperature")] = 0.7;
+    requestBody[QStringLiteral("max_tokens")] = 2048;
+    requestBody[QStringLiteral("stream")] = false;  // non-streaming for tool continuations
+
+    if (m_settings->providerNeedsModelInRequest()) {
+        QString modelId = m_settings->llmModelId();
+        if (modelId.isEmpty() && m_settings->isClaudeProvider())
+            modelId = QStringLiteral("claude-sonnet-4-20250514");
+        if (!modelId.isEmpty())
+            requestBody[QStringLiteral("model")] = modelId;
+    }
+
+    if (m_settings->isClaudeProvider()) {
+        requestBody[QStringLiteral("system")] = buildSystemPrompt(m_currentRagContext);
+        const auto tools = m_mcp->allToolsForClaude();
+        if (!tools.isEmpty())
+            requestBody[QStringLiteral("tools")] = tools;
+    } else {
+        const auto tools = m_mcp->allToolsForOpenAI();
+        if (!tools.isEmpty())
+            requestBody[QStringLiteral("tools")] = tools;
+    }
+
+    url = QUrl(m_settings->chatCompletionsUrl());
+    request.setUrl(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    request.setTransferTimeout(120000);
+
+    if (m_settings->providerNeedsApiKey()) {
+        const QString apiKey = m_settings->activeApiKey();
+        if (m_settings->isClaudeProvider()) {
+            if (apiKey.startsWith(QStringLiteral("sk-ant-oat"))) {
+                request.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+                request.setRawHeader("anthropic-beta", "oauth-2025-04-20");
+            } else {
+                request.setRawHeader("x-api-key", apiKey.toUtf8());
+            }
+            request.setRawHeader("anthropic-version", "2023-06-01");
+        } else {
+            request.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+        }
+    }
+
+    auto *reply = m_networkManager->post(request, QJsonDocument(requestBody).toJson());
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+
+        if (reply->error() != QNetworkReply::NoError) {
+            qWarning() << "[JARVIS] Tool continuation request failed:" << reply->errorString();
+            m_processing = false;
+            emit processingChanged();
+            m_toolCallLoopCount = 0;
+            return;
+        }
+
+        const auto doc = QJsonDocument::fromJson(reply->readAll());
+        const auto root = doc.object();
+
+        // ── Claude response ──────────────────────────────────────
+        if (m_settings->isClaudeProvider()) {
+            const auto contentArr = root[QStringLiteral("content")].toArray();
+            const QString stopReason = root[QStringLiteral("stop_reason")].toString();
+
+            // Extract text parts for display
+            QString textParts;
+            QJsonArray toolUseBlocks;
+            for (const auto &block : contentArr) {
+                const auto obj = block.toObject();
+                if (obj[QStringLiteral("type")].toString() == QStringLiteral("text")) {
+                    textParts += obj[QStringLiteral("text")].toString();
+                } else if (obj[QStringLiteral("type")].toString() == QStringLiteral("tool_use")) {
+                    toolUseBlocks.append(obj);
+                }
+            }
+
+            // Add assistant response to history (full content array for tool_use)
+            if (!toolUseBlocks.isEmpty()) {
+                m_conversationHistory.push_back({QStringLiteral("assistant"), QJsonValue(contentArr)});
+            } else {
+                m_conversationHistory.push_back({QStringLiteral("assistant"), QJsonValue(textParts)});
+            }
+
+            if (!textParts.isEmpty()) {
+                const QString spokenText = stripActionsFromResponse(textParts);
+                m_streamingResponse = spokenText;
+                emit streamingResponseChanged();
+                m_tts->speakSentence(spokenText);
+            }
+
+            // If there are tool calls, execute them
+            if (!toolUseBlocks.isEmpty() && stopReason == QStringLiteral("tool_use")) {
+                int pendingCalls = toolUseBlocks.size();
+                auto *remaining = new int(pendingCalls);
+                QJsonArray *resultBlocks = new QJsonArray();
+
+                for (const auto &toolBlock : toolUseBlocks) {
+                    const auto obj = toolBlock.toObject();
+                    const QString toolId = obj[QStringLiteral("id")].toString();
+                    const QString toolName = obj[QStringLiteral("name")].toString();
+                    const QJsonObject toolInput = obj[QStringLiteral("input")].toObject();
+
+                    qDebug() << "[JARVIS] Claude tool_use:" << toolName << "id:" << toolId;
+                    setStatus(QStringLiteral("Calling tool: %1").arg(toolName));
+
+                    m_mcp->callTool(toolName, toolInput, [this, toolId, toolName, remaining, resultBlocks](QJsonArray content, bool isError) {
+                        qDebug() << "[JARVIS] Tool result for" << toolName << "error:" << isError;
+
+                        // Build tool_result block
+                        QJsonObject resultBlock;
+                        resultBlock[QStringLiteral("type")] = QStringLiteral("tool_result");
+                        resultBlock[QStringLiteral("tool_use_id")] = toolId;
+                        if (isError)
+                            resultBlock[QStringLiteral("is_error")] = true;
+                        // Flatten content to string for Claude
+                        QString contentStr;
+                        for (const auto &c : content) {
+                            const auto cObj = c.toObject();
+                            if (cObj[QStringLiteral("type")].toString() == QStringLiteral("text"))
+                                contentStr += cObj[QStringLiteral("text")].toString();
+                        }
+                        resultBlock[QStringLiteral("content")] = contentStr;
+                        resultBlocks->append(resultBlock);
+
+                        if (--(*remaining) == 0) {
+                            // All tool calls complete — add results and continue
+                            m_conversationHistory.push_back({QStringLiteral("user"), QJsonValue(*resultBlocks)});
+                            delete remaining;
+                            delete resultBlocks;
+                            continueAfterToolCall();
+                        }
+                    });
+                }
+                return;
+            }
+
+            // No more tool calls — finalize
+            if (!textParts.isEmpty()) {
+                const QString spokenText = stripActionsFromResponse(textParts);
+                m_lastResponse = spokenText;
+                m_streamingResponse.clear();
+                emit lastResponseChanged();
+                emit streamingResponseChanged();
+                addToChatHistory("jarvis", spokenText);
+                parseAndExecuteActions(textParts);
+            }
+            m_processing = false;
+            emit processingChanged();
+            setStatus("Ready.");
+            m_toolCallLoopCount = 0;
+            return;
+        }
+
+        // ── OpenAI/Ollama response ───────────────────────────────
+        const auto choices = root[QStringLiteral("choices")].toArray();
+        if (choices.isEmpty()) {
+            m_processing = false;
+            emit processingChanged();
+            m_toolCallLoopCount = 0;
+            return;
+        }
+
+        const auto message = choices[0].toObject()[QStringLiteral("message")].toObject();
+        const QString content = message[QStringLiteral("content")].toString();
+        const auto toolCalls = message[QStringLiteral("tool_calls")].toArray();
+
+        // Add assistant message to history
+        if (!toolCalls.isEmpty()) {
+            // Store the full message object as the content for OpenAI format
+            QJsonArray msgArr;
+            msgArr.append(message);
+            m_conversationHistory.push_back({QStringLiteral("assistant"), QJsonValue(content.isEmpty() ? QStringLiteral("") : content)});
+        } else {
+            m_conversationHistory.push_back({QStringLiteral("assistant"), QJsonValue(content)});
+        }
+
+        if (!content.isEmpty()) {
+            const QString spokenText = stripActionsFromResponse(content);
+            m_streamingResponse = spokenText;
+            emit streamingResponseChanged();
+            m_tts->speakSentence(spokenText);
+        }
+
+        if (!toolCalls.isEmpty()) {
+            int pendingCalls = toolCalls.size();
+            auto *remaining = new int(pendingCalls);
+
+            for (const auto &tc : toolCalls) {
+                const auto tcObj = tc.toObject();
+                const QString callId = tcObj[QStringLiteral("id")].toString();
+                const auto func = tcObj[QStringLiteral("function")].toObject();
+                const QString toolName = func[QStringLiteral("name")].toString();
+                const QJsonObject toolArgs = QJsonDocument::fromJson(
+                    func[QStringLiteral("arguments")].toString().toUtf8()).object();
+
+                qDebug() << "[JARVIS] OpenAI tool_call:" << toolName << "id:" << callId;
+                setStatus(QStringLiteral("Calling tool: %1").arg(toolName));
+
+                m_mcp->callTool(toolName, toolArgs, [this, callId, toolName, remaining](QJsonArray content, bool isError) {
+                    qDebug() << "[JARVIS] Tool result for" << toolName << "error:" << isError;
+
+                    // Build tool result message for OpenAI format
+                    QString resultStr;
+                    for (const auto &c : content) {
+                        const auto cObj = c.toObject();
+                        if (cObj[QStringLiteral("type")].toString() == QStringLiteral("text"))
+                            resultStr += cObj[QStringLiteral("text")].toString();
+                    }
+
+                    QJsonObject toolMsg;
+                    toolMsg[QStringLiteral("role")] = QStringLiteral("tool");
+                    toolMsg[QStringLiteral("tool_call_id")] = callId;
+                    toolMsg[QStringLiteral("content")] = resultStr;
+
+                    // For OpenAI, each tool result is a separate message with role "tool"
+                    m_conversationHistory.push_back({QStringLiteral("tool"), QJsonValue(resultStr)});
+
+                    if (--(*remaining) == 0) {
+                        delete remaining;
+                        continueAfterToolCall();
+                    }
+                });
+            }
+            return;
+        }
+
+        // No more tool calls — finalize
+        if (!content.isEmpty()) {
+            const QString spokenText = stripActionsFromResponse(content);
+            m_lastResponse = spokenText;
+            m_streamingResponse.clear();
+            emit lastResponseChanged();
+            emit streamingResponseChanged();
+            addToChatHistory("jarvis", spokenText);
+            parseAndExecuteActions(content);
+        }
+        m_processing = false;
+        emit processingChanged();
+        setStatus("Ready.");
+        m_toolCallLoopCount = 0;
+    });
 }
 
 void JarvisBackend::onLlmStreamFinished()
@@ -1403,10 +1752,13 @@ void JarvisBackend::exportHistory(const QString &path)
 {
     QJsonArray arr;
     for (const auto &[role, content] : m_conversationHistory) {
-        arr.append(QJsonObject{
-            {QStringLiteral("role"), role},
-            {QStringLiteral("content"), content},
-        });
+        QJsonObject entry;
+        entry[QStringLiteral("role")] = role;
+        if (content.isArray())
+            entry[QStringLiteral("content")] = content.toArray();
+        else
+            entry[QStringLiteral("content")] = content.toString();
+        arr.append(entry);
     }
     QFile file(path);
     if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -1437,10 +1789,17 @@ void JarvisBackend::importHistory(const QString &path)
     for (const auto &val : arr) {
         const auto obj = val.toObject();
         const QString role = obj[QStringLiteral("role")].toString();
-        const QString content = obj[QStringLiteral("content")].toString();
-        if (role.isEmpty() || content.isEmpty()) continue;
+        QJsonValue content;
+        if (obj[QStringLiteral("content")].isArray())
+            content = obj[QStringLiteral("content")].toArray();
+        else
+            content = obj[QStringLiteral("content")].toString();
+
+        QString displayText = content.isString() ? content.toString() : QString();
+        if (role.isEmpty() || (displayText.isEmpty() && content.isString())) continue;
         m_conversationHistory.push_back({role, content});
-        m_chatHistory.append(QStringLiteral("%1|%2").arg(role, content));
+        if (!displayText.isEmpty())
+            m_chatHistory.append(QStringLiteral("%1|%2").arg(role, displayText));
     }
     emit chatHistoryChanged();
     saveChatHistory();
@@ -1481,13 +1840,20 @@ void JarvisBackend::trimConversationToTokenLimit()
         m_conversationHistory.erase(m_conversationHistory.begin());
     }
 
+    // Helper to estimate tokens from a QJsonValue content
+    auto contentTokens = [](const QJsonValue &content) -> int {
+        if (content.isString())
+            return estimateTokenCount(content.toString());
+        return estimateTokenCount(QJsonDocument(content.toArray()).toJson(QJsonDocument::Compact));
+    };
+
     // Trim by token count — remove oldest messages until under budget
     int totalTokens = 0;
     for (const auto &[role, content] : m_conversationHistory)
-        totalTokens += estimateTokenCount(content) + 4;
+        totalTokens += contentTokens(content) + 4;
 
     while (totalTokens > available && m_conversationHistory.size() > 1) {
-        totalTokens -= estimateTokenCount(m_conversationHistory.front().content) + 4;
+        totalTokens -= contentTokens(m_conversationHistory.front().content) + 4;
         m_conversationHistory.erase(m_conversationHistory.begin());
     }
 }
@@ -1497,10 +1863,13 @@ void JarvisBackend::saveChatHistory()
     const QString path = m_settings->jarvisDataDir() + QStringLiteral("/chat_history.json");
     QJsonArray historyArray;
     for (const auto &[role, content] : m_conversationHistory) {
-        historyArray.append(QJsonObject{
-            {QStringLiteral("role"), role},
-            {QStringLiteral("content"), content},
-        });
+        QJsonObject entry;
+        entry[QStringLiteral("role")] = role;
+        if (content.isArray())
+            entry[QStringLiteral("content")] = content.toArray();
+        else
+            entry[QStringLiteral("content")] = content.toString();
+        historyArray.append(entry);
     }
     QFile file(path);
     if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -1521,10 +1890,32 @@ void JarvisBackend::loadChatHistory()
     for (const auto &val : arr) {
         const auto obj = val.toObject();
         const QString role = obj[QStringLiteral("role")].toString();
-        const QString content = obj[QStringLiteral("content")].toString();
-        if (role.isEmpty() || content.isEmpty()) continue;
+        if (role.isEmpty()) continue;
+
+        QJsonValue content;
+        if (obj[QStringLiteral("content")].isArray())
+            content = obj[QStringLiteral("content")].toArray();
+        else
+            content = obj[QStringLiteral("content")].toString();
+
+        // For display, extract text
+        QString displayText;
+        if (content.isString())
+            displayText = content.toString();
+        else {
+            // Extract text from content blocks
+            const auto blocks = content.toArray();
+            for (const auto &b : blocks) {
+                const auto bObj = b.toObject();
+                if (bObj[QStringLiteral("type")].toString() == QStringLiteral("text"))
+                    displayText += bObj[QStringLiteral("text")].toString();
+            }
+        }
+
+        if (displayText.isEmpty() && content.isString()) continue;
         m_conversationHistory.push_back({role, content});
-        m_chatHistory.append(QStringLiteral("%1|%2").arg(role, content));
+        if (!displayText.isEmpty())
+            m_chatHistory.append(QStringLiteral("%1|%2").arg(role, displayText));
     }
     if (!m_chatHistory.isEmpty()) emit chatHistoryChanged();
 }

@@ -9,6 +9,7 @@ set(jarvis_plugin_SRCS
     system/jarvissystem.cpp
     commands/jarviscommands.cpp
     rag/jarvisrag.cpp
+    mcp/jarvismcp.cpp
 )
 
 add_library(jarvis_plugin SHARED ${jarvis_plugin_SRCS})
