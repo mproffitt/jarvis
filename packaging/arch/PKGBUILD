@@ -25,11 +25,11 @@ makedepends=(
     'cmake>=3.25'
     'extra-cmake-modules>=6.0'
     'gcc>=13'
+    'git'
     'pipewire'
     'rnnoise'
 )
 optdepends=(
-    'piper-tts: high-quality offline text-to-speech'
     'xdotool: keyboard simulation for type_text action'
     'llama.cpp: local LLM server for AI chat'
     'ollama: local LLM server with model management'

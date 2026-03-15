@@ -26,13 +26,14 @@ BuildRequires:  kf6-baloo-devel
 BuildRequires:  pipewire-devel
 BuildRequires:  rnnoise-devel
 BuildRequires:  whisper-cpp-devel
+BuildRequires:  cmake(Qt6DBus) >= 6.0
+BuildRequires:  git
 Requires:       kf6-kwallet%{?_isa}
 Requires:       kf6-plasma%{?_isa}
 Requires:       qt6-qtbase%{?_isa}
 Requires:       qt6-qtdeclarative%{?_isa}
 Requires:       pipewire
 Requires:       rnnoise
-Recommends:     piper
 Recommends:     xdotool
 Recommends:     playerctl
 Suggests:       llama-cpp
@@ -70,6 +71,9 @@ Everything runs locally — no cloud, no API keys, no data leaves your machine.
 %dir %{_libdir}/qt6/qml/org/kde/plasma/jarvis
 %{_libdir}/qt6/qml/org/kde/plasma/jarvis/*
 %{_datadir}/icons/hicolor/*/apps/jarvis-ai.*
+# libpiper (built from source if not system-installed)
+%{_libdir}/libpiper.so
+%{_datadir}/espeak-ng-data
 
 %changelog
 * Thu Mar  6 2026 Kamil 'Novik' Nowicki <kamil@kamilnowicki.com> - 0.1.1-1
