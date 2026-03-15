@@ -78,14 +78,43 @@ ecm_install_icons(
     THEME hicolor
 )
 
-# libpiper for native TTS synthesis (optional)
+# libpiper for native TTS synthesis
+# Try system install first, build from source if not found
 find_library(PIPER_LIB NAMES piper PATHS /usr/local/lib64 /usr/local/lib)
 find_path(PIPER_INC piper.h PATHS /usr/local/include)
 if(PIPER_LIB AND PIPER_INC)
     set(PIPER_FOUND TRUE)
     message(STATUS "Found libpiper: ${PIPER_LIB}")
 else()
-    message(STATUS "libpiper not found — falling back to piper binary")
+    message(STATUS "libpiper not found — building from source (this may take a few minutes)")
+    include(FetchContent)
+    FetchContent_Declare(
+        piper1_gpl
+        GIT_REPOSITORY https://github.com/OHF-Voice/piper1-gpl.git
+        GIT_TAG main
+    )
+    FetchContent_Populate(piper1_gpl)
+    # EXCLUDE_FROM_ALL prevents upstream's install() rules from running
+    add_subdirectory(${piper1_gpl_SOURCE_DIR}/libpiper ${piper1_gpl_BINARY_DIR} EXCLUDE_FROM_ALL)
+
+    # onnxruntime headers require exceptions, and symbols must be exported
+    target_compile_options(piper PRIVATE -fexceptions -fvisibility=default)
+
+    # Point to the built library and header
+    set(PIPER_LIB piper)
+    set(PIPER_INC ${piper1_gpl_SOURCE_DIR}/libpiper/include)
+    set(PIPER_FOUND TRUE)
+    set(PIPER_BUILT_FROM_SOURCE TRUE)
+
+    # Override piper's install to use proper directories
+    set_target_properties(piper PROPERTIES
+        INSTALL_RPATH_USE_LINK_PATH TRUE)
+    install(TARGETS piper DESTINATION ${KDE_INSTALL_LIBDIR})
+    install(FILES ${piper1_gpl_SOURCE_DIR}/libpiper/include/piper.h
+            DESTINATION ${KDE_INSTALL_INCLUDEDIR})
+    install(DIRECTORY ${CMAKE_BINARY_DIR}/espeak_ng-install/share/espeak-ng-data
+            DESTINATION ${KDE_INSTALL_DATADIR})
+    message(STATUS "libpiper will be built from source")
 endif()
 
 add_subdirectory(src/plugin)
