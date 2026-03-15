@@ -9,6 +9,8 @@
 
 #include <QDBusInterface>
 #include <QDBusReply>
+#include <QDBusUnixFileDescriptor>
+#include <unistd.h>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -1786,29 +1788,49 @@ void JarvisBackend::handleScreenContext(const QString &question)
     setStatus("Capturing screen...");
     speak(QStringLiteral("Let me take a look."));
 
-    const QString screenshotPath = QDir::tempPath() + QStringLiteral("/jarvis_screenshot.png");
+    // Capture screenshot via KWin D-Bus ScreenShot2 API
+    int pipeFds[2];
+    if (pipe(pipeFds) != 0) {
+        speak(QStringLiteral("Sorry, I couldn't capture the screen."));
+        setStatus("Screenshot failed.");
+        return;
+    }
 
-    // Capture screenshot using spectacle (KDE) — works on Wayland
-    auto *proc = new QProcess(this);
-    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, proc, screenshotPath, question, switchedModel, originalModel](int exitCode, QProcess::ExitStatus) {
-        proc->deleteLater();
+    QDBusInterface kwin(QStringLiteral("org.kde.KWin"),
+        QStringLiteral("/org/kde/KWin/ScreenShot2"),
+        QStringLiteral("org.kde.KWin.ScreenShot2"));
 
-        if (exitCode != 0 || !QFile::exists(screenshotPath)) {
-            speak(QStringLiteral("Sorry, I couldn't capture the screen."));
-            setStatus("Screenshot failed.");
-            return;
-        }
+    QVariantMap options;
+    QDBusUnixFileDescriptor fd(pipeFds[1]);
+    ::close(pipeFds[1]); // Close write end in our process — KWin has it now
 
-        // Read and base64-encode the image
-        QFile imgFile(screenshotPath);
-        if (!imgFile.open(QIODevice::ReadOnly)) {
-            speak(QStringLiteral("Sorry, I couldn't read the screenshot."));
-            return;
-        }
-        const QByteArray imageData = imgFile.readAll();
-        imgFile.close();
-        QFile::remove(screenshotPath);
+    const auto reply = kwin.call(QStringLiteral("CaptureActiveScreen"),
+        QVariant::fromValue(options), QVariant::fromValue(fd));
+
+    if (reply.type() == QDBusMessage::ErrorMessage) {
+        ::close(pipeFds[0]);
+        qWarning() << "[JARVIS] KWin screenshot failed:" << reply.errorMessage();
+        speak(QStringLiteral("Sorry, I couldn't capture the screen."));
+        setStatus("Screenshot failed.");
+        return;
+    }
+
+    // Read image data from the pipe
+    QByteArray imageData;
+    char buf[65536];
+    ssize_t n;
+    while ((n = ::read(pipeFds[0], buf, sizeof(buf))) > 0) {
+        imageData.append(buf, static_cast<int>(n));
+    }
+    ::close(pipeFds[0]);
+
+    if (imageData.isEmpty()) {
+        speak(QStringLiteral("Sorry, I couldn't read the screenshot."));
+        setStatus("Screenshot failed.");
+        return;
+    }
+
+    {
 
         // Resize if too large (>2MB) — scale down for faster upload
         const QString base64 = QString::fromLatin1(imageData.toBase64());
@@ -1953,12 +1975,7 @@ void JarvisBackend::handleScreenContext(const QString &question)
                 qDebug() << "[JARVIS] Restored model to:" << originalModel;
             }
         });
-    });
-
-    // Capture: fullscreen, background mode, no notification
-    proc->start(QStringLiteral("spectacle"), {
-        QStringLiteral("-b"), QStringLiteral("-n"), QStringLiteral("-f"),
-        QStringLiteral("-o"), screenshotPath});
+    }
 }
 
 void JarvisBackend::clearHistory()
