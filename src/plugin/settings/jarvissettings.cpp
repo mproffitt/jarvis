@@ -775,6 +775,58 @@ void JarvisSettings::fetchOllamaModels()
                 {QStringLiteral("active"), name == m_llmModelId},
             });
         }
+        emit availableLlmModelsChanged();
+        // Auto-fetch suggested models after installed list is ready
+        fetchSuggestedOllamaModels();
+    });
+}
+
+void JarvisSettings::fetchSuggestedOllamaModels(const QString &query)
+{
+    // Search ollama.com for available models
+    const QString searchUrl = query.isEmpty()
+        ? QStringLiteral("https://ollama.com/search")
+        : QStringLiteral("https://ollama.com/search?q=%1").arg(QString::fromUtf8(QUrl::toPercentEncoding(query)));
+
+    QNetworkRequest request{QUrl(searchUrl)};
+    request.setTransferTimeout(10000);
+
+    auto *reply = m_networkManager->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) return;
+
+        const QString html = QString::fromUtf8(reply->readAll());
+
+        // Parse model cards from HTML: href="/library/NAME" followed by description in <p>
+        static const QRegularExpression modelRe(
+            QStringLiteral("href=\"/library/([^\"]+)\"[^>]*>.*?<p[^>]*>([^<]*)</p>"),
+            QRegularExpression::DotMatchesEverythingOption);
+
+        // Get installed model names for filtering
+        QStringList installed;
+        for (const auto &v : std::as_const(m_availableLlmModels))
+            installed << v.toMap()[QStringLiteral("id")].toString().split(':').first().toLower();
+
+        m_suggestedOllamaModels.clear();
+        auto it = modelRe.globalMatch(html);
+        while (it.hasNext()) {
+            const auto match = it.next();
+            const QString name = match.captured(1).trimmed();
+            const QString desc = match.captured(2).trimmed();
+
+            // Skip if already installed
+            if (installed.contains(name.split(':').first().toLower())) continue;
+
+            m_suggestedOllamaModels.append(QVariantMap{
+                {QStringLiteral("id"), name},
+                {QStringLiteral("name"), name},
+                {QStringLiteral("size"), QString()},
+                {QStringLiteral("desc"), desc},
+            });
+        }
+
+        emit suggestedOllamaModelsChanged();
     });
 }
 

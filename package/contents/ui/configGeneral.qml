@@ -448,29 +448,6 @@ Item {
                 }
             }
 
-            RowLayout {
-                Kirigami.FormData.label: i18n("Pull model:")
-                visible: JarvisBackend.llmProvider === "ollama"
-                spacing: Kirigami.Units.smallSpacing
-                TextField {
-                    id: ollamaPullField
-                    placeholderText: i18n("e.g. llava:latest")
-                    Layout.fillWidth: true
-                    implicitWidth: Kirigami.Units.gridUnit * 12
-                    enabled: !JarvisBackend.downloading
-                    onAccepted: {
-                        if (text.length > 0) {
-                            JarvisBackend.pullOllamaModel(text)
-                        }
-                    }
-                }
-                Button {
-                    text: i18n("Pull")
-                    icon.name: "download"
-                    enabled: ollamaPullField.text.length > 0 && !JarvisBackend.downloading
-                    onClicked: JarvisBackend.pullOllamaModel(ollamaPullField.text)
-                }
-            }
 
             RowLayout {
                 Kirigami.FormData.label: i18n("Status:")
@@ -522,6 +499,93 @@ Item {
                             return
                         }
                         idx++
+                    }
+                }
+            }
+        }
+
+        // ════════════════════════════════════════
+        // DOWNLOAD NEW OLLAMA MODELS
+        // ════════════════════════════════════════
+        Kirigami.FormLayout {
+            Layout.fillWidth: true
+            visible: JarvisBackend.llmProvider === "ollama"
+            Component.onCompleted: { for (var i = 0; i < children.length; i++) { if (children[i].hasOwnProperty("columns")) { children[i].anchors.horizontalCenter = undefined; children[i].anchors.left = left; children[i].anchors.leftMargin = Qt.binding(function() { return Kirigami.Units.smallSpacing; }); } } }
+
+            Kirigami.Separator {
+                Kirigami.FormData.isSection: true
+                Kirigami.FormData.label: i18n("Download New Models")
+            }
+
+            Label {
+                text: i18n("Search the Ollama registry, or enter a model name to pull directly.")
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+                color: Kirigami.Theme.disabledTextColor
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+            }
+
+            RowLayout {
+                Kirigami.FormData.label: i18n("Search:")
+                spacing: Kirigami.Units.smallSpacing
+                TextField {
+                    id: ollamaFilterField
+                    placeholderText: i18n("Search models or enter name to pull...")
+                    Layout.fillWidth: true
+                    implicitWidth: Kirigami.Units.gridUnit * 12
+                    onAccepted: JarvisBackend.fetchSuggestedOllamaModels(text)
+                }
+                Button {
+                    icon.name: "search"
+                    onClicked: JarvisBackend.fetchSuggestedOllamaModels(ollamaFilterField.text)
+                }
+                Button {
+                    text: i18n("Pull")
+                    icon.name: "download"
+                    visible: ollamaFilterField.text.length > 0
+                    enabled: !JarvisBackend.downloading
+                    onClicked: JarvisBackend.pullOllamaModel(ollamaFilterField.text)
+                }
+            }
+        }
+
+        Repeater {
+            id: ollamaSuggestedRepeater
+            model: JarvisBackend.llmProvider === "ollama" ? JarvisBackend.suggestedOllamaModels : []
+            delegate: Kirigami.AbstractCard {
+                Layout.fillWidth: true
+                Layout.leftMargin: Kirigami.Units.smallSpacing
+                Layout.rightMargin: Kirigami.Units.smallSpacing
+                contentItem: RowLayout {
+                    spacing: Kirigami.Units.largeSpacing
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 2
+                        RowLayout {
+                            spacing: Kirigami.Units.smallSpacing
+                            Label {
+                                text: modelData.name
+                                font.bold: true
+                            }
+                            Label {
+                                text: modelData.size
+                                color: Kirigami.Theme.disabledTextColor
+                                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                            }
+                        }
+                        Label {
+                            text: modelData.desc
+                            color: Kirigami.Theme.disabledTextColor
+                            font.pointSize: Kirigami.Theme.smallFont.pointSize
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                        }
+                    }
+                    Button {
+                        text: i18n("Pull")
+                        icon.name: "download"
+                        enabled: !JarvisBackend.downloading
+                        onClicked: JarvisBackend.pullOllamaModel(modelData.id)
                     }
                 }
             }

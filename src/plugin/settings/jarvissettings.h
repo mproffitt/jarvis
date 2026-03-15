@@ -45,6 +45,8 @@ public:
     [[nodiscard]] double downloadProgress() const { return m_downloadProgress; }
     [[nodiscard]] bool isDownloading() const { return m_downloading; }
     [[nodiscard]] QString downloadStatus() const { return m_downloadStatus; }
+    [[nodiscard]] QVariantList suggestedOllamaModels() const { return m_suggestedOllamaModels; }
+    void fetchSuggestedOllamaModels(const QString &query = {});
     void setDownloadProgress(double p) { m_downloadProgress = p; emit downloadProgressChanged(); }
     void setDownloading(bool d) { m_downloading = d; emit downloadingChanged(); }
     void setDownloadStatus(const QString &s) { m_downloadStatus = s; emit downloadStatusChanged(); }
@@ -125,6 +127,8 @@ signals:
     void currentModelNameChanged();
     void currentVoiceNameChanged();
     void downloadProgressChanged();
+    void availableLlmModelsChanged();
+    void suggestedOllamaModelsChanged();
     void downloadingChanged();
     void downloadStatusChanged();
     void maxHistoryPairsChanged();
@@ -197,4 +201,5 @@ private:
     bool m_ttsMuted{false};
     QString m_piperModelPath;
     QVariantList m_cloudModelChoices;
+    QVariantList m_suggestedOllamaModels;
 };

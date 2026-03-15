@@ -155,6 +155,7 @@ public:
     [[nodiscard]] QString currentModelName() const;
     [[nodiscard]] QString currentVoiceName() const;
     [[nodiscard]] QVariantList availableLlmModels() const;
+    [[nodiscard]] QVariantList suggestedOllamaModels() const;
     [[nodiscard]] QVariantList cloudModelChoices() const;
     [[nodiscard]] QVariantList availableTtsVoices() const;
     [[nodiscard]] double downloadProgress() const;
@@ -217,6 +218,8 @@ public:
     Q_INVOKABLE void setClaudeApiKey(const QString &key);
     Q_INVOKABLE void setLlmModelId(const QString &modelId);
     Q_INVOKABLE void refreshOllamaModels();
+    Q_INVOKABLE void fetchSuggestedOllamaModels(const QString &query = {});
+    Q_PROPERTY(QVariantList suggestedOllamaModels READ suggestedOllamaModels NOTIFY suggestedOllamaModelsChanged)
     Q_INVOKABLE void pullOllamaModel(const QString &modelName);
     Q_INVOKABLE void refreshCloudModels();
     Q_INVOKABLE void downloadLlmModel(const QString &modelId);
@@ -303,6 +306,7 @@ signals:
     void oauthStatusChanged();
     void commandMappingsChanged();
     void availableLlmModelsChanged();
+    void suggestedOllamaModelsChanged();
     void cloudModelChoicesChanged();
     void availableTtsVoicesChanged();
 

@@ -231,6 +231,8 @@ void JarvisBackend::connectModuleSignals()
     connect(m_settings, &JarvisSettings::downloadProgressChanged, this, &JarvisBackend::downloadProgressChanged);
     connect(m_settings, &JarvisSettings::downloadingChanged, this, &JarvisBackend::downloadingChanged);
     connect(m_settings, &JarvisSettings::downloadStatusChanged, this, &JarvisBackend::downloadStatusChanged);
+    connect(m_settings, &JarvisSettings::availableLlmModelsChanged, this, &JarvisBackend::availableLlmModelsChanged);
+    connect(m_settings, &JarvisSettings::suggestedOllamaModelsChanged, this, &JarvisBackend::suggestedOllamaModelsChanged);
     connect(m_settings, &JarvisSettings::maxHistoryPairsChanged, this, &JarvisBackend::maxHistoryPairsChanged);
     connect(m_settings, &JarvisSettings::wakeBufferSecondsChanged, this, [this]() {
         m_audio->updateWakeBufferInterval(m_settings->wakeBufferSeconds());
@@ -382,6 +384,13 @@ void JarvisBackend::refreshOllamaModels()
     emit availableLlmModelsChanged();
 }
 
+QVariantList JarvisBackend::suggestedOllamaModels() const { return m_settings->suggestedOllamaModels(); }
+
+void JarvisBackend::fetchSuggestedOllamaModels(const QString &query)
+{
+    m_settings->fetchSuggestedOllamaModels(query);
+}
+
 void JarvisBackend::pullOllamaModel(const QString &modelName)
 {
     if (modelName.isEmpty()) return;
@@ -431,6 +440,7 @@ void JarvisBackend::pullOllamaModel(const QString &modelName)
         if (reply->error() == QNetworkReply::NoError) {
             m_settings->setDownloadStatus(QStringLiteral("Pulled %1 successfully!").arg(modelName));
             refreshOllamaModels();
+            fetchSuggestedOllamaModels(); // Refresh to remove newly installed model
         } else {
             m_settings->setDownloadStatus(QStringLiteral("Pull failed: %1").arg(reply->errorString()));
         }
