@@ -232,7 +232,7 @@ void JarvisBackend::connectModuleSignals()
     connect(m_settings, &JarvisSettings::downloadingChanged, this, &JarvisBackend::downloadingChanged);
     connect(m_settings, &JarvisSettings::downloadStatusChanged, this, &JarvisBackend::downloadStatusChanged);
     connect(m_settings, &JarvisSettings::availableLlmModelsChanged, this, &JarvisBackend::availableLlmModelsChanged);
-    connect(m_settings, &JarvisSettings::suggestedOllamaModelsChanged, this, &JarvisBackend::suggestedOllamaModelsChanged);
+    connect(m_settings, &JarvisSettings::hfSearchResultsChanged, this, &JarvisBackend::hfSearchResultsChanged);
     connect(m_settings, &JarvisSettings::maxHistoryPairsChanged, this, &JarvisBackend::maxHistoryPairsChanged);
     connect(m_settings, &JarvisSettings::wakeBufferSecondsChanged, this, [this]() {
         m_audio->updateWakeBufferInterval(m_settings->wakeBufferSeconds());
@@ -384,11 +384,11 @@ void JarvisBackend::refreshOllamaModels()
     emit availableLlmModelsChanged();
 }
 
-QVariantList JarvisBackend::suggestedOllamaModels() const { return m_settings->suggestedOllamaModels(); }
+QVariantList JarvisBackend::hfSearchResults() const { return m_settings->hfSearchResults(); }
 
-void JarvisBackend::fetchSuggestedOllamaModels(const QString &query)
+void JarvisBackend::searchModels(const QString &query)
 {
-    m_settings->fetchSuggestedOllamaModels(query);
+    m_settings->searchHuggingFaceModels(query);
 }
 
 void JarvisBackend::pullOllamaModel(const QString &modelName)
@@ -403,6 +403,8 @@ void JarvisBackend::pullOllamaModel(const QString &modelName)
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setTransferTimeout(0); // No timeout — pulls can take a while
+    // Force HTTP/1.1 — HTTP/2 can buffer streaming responses
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
 
     QJsonObject body;
     body[QStringLiteral("name")] = modelName;
@@ -440,7 +442,9 @@ void JarvisBackend::pullOllamaModel(const QString &modelName)
         if (reply->error() == QNetworkReply::NoError) {
             m_settings->setDownloadStatus(QStringLiteral("Pulled %1 successfully!").arg(modelName));
             refreshOllamaModels();
-            fetchSuggestedOllamaModels(); // Refresh to remove newly installed model
+            m_settings->setLlmModelId(modelName); // Auto-select newly pulled model
+            // Re-search to filter out newly installed model from cards
+            m_settings->searchHuggingFaceModels(m_settings->lastHfQuery());
         } else {
             m_settings->setDownloadStatus(QStringLiteral("Pull failed: %1").arg(reply->errorString()));
         }
@@ -535,12 +539,6 @@ void JarvisBackend::testVoice(const QString &voiceId)
     });
     proc->setProcessChannelMode(QProcess::MergedChannels);
     proc->start(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), cmd});
-}
-
-void JarvisBackend::fetchMoreModels()
-{
-    m_settings->fetchMoreModels();
-    emit availableLlmModelsChanged();
 }
 
 void JarvisBackend::fetchMoreVoices()

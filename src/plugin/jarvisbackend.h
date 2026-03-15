@@ -75,6 +75,7 @@ class JarvisBackend : public QObject
     Q_PROPERTY(QString currentModelName READ currentModelName NOTIFY currentModelNameChanged)
     Q_PROPERTY(QString currentVoiceName READ currentVoiceName NOTIFY currentVoiceNameChanged)
     Q_PROPERTY(QVariantList availableLlmModels READ availableLlmModels NOTIFY availableLlmModelsChanged)
+    Q_PROPERTY(QVariantList hfSearchResults READ hfSearchResults NOTIFY hfSearchResultsChanged)
     Q_PROPERTY(QVariantList cloudModelChoices READ cloudModelChoices NOTIFY cloudModelChoicesChanged)
     Q_PROPERTY(QVariantList availableTtsVoices READ availableTtsVoices NOTIFY availableTtsVoicesChanged)
     Q_PROPERTY(double downloadProgress READ downloadProgress NOTIFY downloadProgressChanged)
@@ -155,7 +156,7 @@ public:
     [[nodiscard]] QString currentModelName() const;
     [[nodiscard]] QString currentVoiceName() const;
     [[nodiscard]] QVariantList availableLlmModels() const;
-    [[nodiscard]] QVariantList suggestedOllamaModels() const;
+    [[nodiscard]] QVariantList hfSearchResults() const;
     [[nodiscard]] QVariantList cloudModelChoices() const;
     [[nodiscard]] QVariantList availableTtsVoices() const;
     [[nodiscard]] double downloadProgress() const;
@@ -218,8 +219,7 @@ public:
     Q_INVOKABLE void setClaudeApiKey(const QString &key);
     Q_INVOKABLE void setLlmModelId(const QString &modelId);
     Q_INVOKABLE void refreshOllamaModels();
-    Q_INVOKABLE void fetchSuggestedOllamaModels(const QString &query = {});
-    Q_PROPERTY(QVariantList suggestedOllamaModels READ suggestedOllamaModels NOTIFY suggestedOllamaModelsChanged)
+    Q_INVOKABLE void searchModels(const QString &query);
     Q_INVOKABLE void pullOllamaModel(const QString &modelName);
     Q_INVOKABLE void refreshCloudModels();
     Q_INVOKABLE void downloadLlmModel(const QString &modelId);
@@ -242,7 +242,6 @@ public:
     Q_INVOKABLE void cancelDownload();
     Q_INVOKABLE void openUrl(const QString &url);
     Q_INVOKABLE void testVoice(const QString &voiceId);
-    Q_INVOKABLE void fetchMoreModels();
     Q_INVOKABLE void fetchMoreVoices();
 
     // OAuth invokables
@@ -306,7 +305,7 @@ signals:
     void oauthStatusChanged();
     void commandMappingsChanged();
     void availableLlmModelsChanged();
-    void suggestedOllamaModelsChanged();
+    void hfSearchResultsChanged();
     void cloudModelChoicesChanged();
     void availableTtsVoicesChanged();
 

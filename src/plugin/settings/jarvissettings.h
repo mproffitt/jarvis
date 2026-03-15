@@ -45,8 +45,9 @@ public:
     [[nodiscard]] double downloadProgress() const { return m_downloadProgress; }
     [[nodiscard]] bool isDownloading() const { return m_downloading; }
     [[nodiscard]] QString downloadStatus() const { return m_downloadStatus; }
-    [[nodiscard]] QVariantList suggestedOllamaModels() const { return m_suggestedOllamaModels; }
-    void fetchSuggestedOllamaModels(const QString &query = {});
+    [[nodiscard]] QVariantList hfSearchResults() const { return m_hfSearchResults; }
+    void searchHuggingFaceModels(const QString &query);
+    [[nodiscard]] QString lastHfQuery() const { return m_lastHfQuery; }
     void setDownloadProgress(double p) { m_downloadProgress = p; emit downloadProgressChanged(); }
     void setDownloading(bool d) { m_downloading = d; emit downloadingChanged(); }
     void setDownloadStatus(const QString &s) { m_downloadStatus = s; emit downloadStatusChanged(); }
@@ -113,7 +114,6 @@ public:
     void fetchCloudModels();
     void populateModelList();
     void populateVoiceList();
-    void fetchMoreModels();
     void fetchMoreVoices();
     void fetchOllamaModels();
 
@@ -128,7 +128,7 @@ signals:
     void currentVoiceNameChanged();
     void downloadProgressChanged();
     void availableLlmModelsChanged();
-    void suggestedOllamaModelsChanged();
+    void hfSearchResultsChanged();
     void downloadingChanged();
     void downloadStatusChanged();
     void maxHistoryPairsChanged();
@@ -201,5 +201,6 @@ private:
     bool m_ttsMuted{false};
     QString m_piperModelPath;
     QVariantList m_cloudModelChoices;
-    QVariantList m_suggestedOllamaModels;
+    QVariantList m_hfSearchResults;
+    QString m_lastHfQuery;
 };

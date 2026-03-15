@@ -21,11 +21,8 @@ Item {
         width: configRoot.availableWidth
         spacing: 0
 
-        // ════════════════════════════════════════
-        // DOWNLOAD PROGRESS — always visible at top when downloading
-        // ════════════════════════════════════════
+        // Download progress banner
         Kirigami.InlineMessage {
-            id: downloadBanner
             Layout.fillWidth: true
             Layout.margins: Kirigami.Units.smallSpacing
             visible: JarvisBackend.downloading
@@ -49,6 +46,7 @@ Item {
             from: 0; to: 1.0
             value: JarvisBackend.downloadProgress
         }
+
 
         // ════════════════════════════════════════
         // LLM PROVIDER
@@ -505,12 +503,21 @@ Item {
         }
 
         // ════════════════════════════════════════
-        // DOWNLOAD NEW OLLAMA MODELS
+        // SEARCH & DOWNLOAD MODELS (HuggingFace)
         // ════════════════════════════════════════
         Kirigami.FormLayout {
             Layout.fillWidth: true
-            visible: JarvisBackend.llmProvider === "ollama"
-            Component.onCompleted: { for (var i = 0; i < children.length; i++) { if (children[i].hasOwnProperty("columns")) { children[i].anchors.horizontalCenter = undefined; children[i].anchors.left = left; children[i].anchors.leftMargin = Qt.binding(function() { return Kirigami.Units.smallSpacing; }); } } }
+            visible: JarvisBackend.llmProvider === "ollama" || JarvisBackend.llmProvider === "llamacpp"
+            Component.onCompleted: {
+                for (var i = 0; i < children.length; i++) {
+                    if (children[i].hasOwnProperty("columns")) {
+                        children[i].anchors.horizontalCenter = undefined;
+                        children[i].anchors.left = left;
+                        children[i].anchors.leftMargin = Qt.binding(function() { return Kirigami.Units.smallSpacing; });
+                    }
+                }
+                JarvisBackend.searchModels("popular gguf chat")
+            }
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
@@ -518,7 +525,7 @@ Item {
             }
 
             Label {
-                text: i18n("Search the Ollama registry, or enter a model name to pull directly.")
+                text: i18n("Search HuggingFace for GGUF models. Results sorted by popularity.")
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
                 color: Kirigami.Theme.disabledTextColor
@@ -529,29 +536,23 @@ Item {
                 Kirigami.FormData.label: i18n("Search:")
                 spacing: Kirigami.Units.smallSpacing
                 TextField {
-                    id: ollamaFilterField
-                    placeholderText: i18n("Search models or enter name to pull...")
+                    id: hfSearchField
+                    placeholderText: i18n("Search GGUF models...")
                     Layout.fillWidth: true
                     implicitWidth: Kirigami.Units.gridUnit * 12
-                    onAccepted: JarvisBackend.fetchSuggestedOllamaModels(text)
+                    onAccepted: JarvisBackend.searchModels(text)
                 }
                 Button {
                     icon.name: "search"
-                    onClicked: JarvisBackend.fetchSuggestedOllamaModels(ollamaFilterField.text)
-                }
-                Button {
-                    text: i18n("Pull")
-                    icon.name: "download"
-                    visible: ollamaFilterField.text.length > 0
-                    enabled: !JarvisBackend.downloading
-                    onClicked: JarvisBackend.pullOllamaModel(ollamaFilterField.text)
+                    onClicked: JarvisBackend.searchModels(hfSearchField.text)
                 }
             }
+
         }
 
         Repeater {
-            id: ollamaSuggestedRepeater
-            model: JarvisBackend.llmProvider === "ollama" ? JarvisBackend.suggestedOllamaModels : []
+            model: (JarvisBackend.llmProvider === "ollama" || JarvisBackend.llmProvider === "llamacpp")
+                   ? JarvisBackend.hfSearchResults : []
             delegate: Kirigami.AbstractCard {
                 Layout.fillWidth: true
                 Layout.leftMargin: Kirigami.Units.smallSpacing
@@ -568,7 +569,14 @@ Item {
                                 font.bold: true
                             }
                             Label {
-                                text: modelData.size
+                                text: modelData.size ? modelData.size : ""
+                                visible: modelData.size && modelData.size.length > 0
+                                color: Kirigami.Theme.disabledTextColor
+                                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                            }
+                            Label {
+                                text: modelData.downloads ? ("  " + modelData.downloads + " downloads") : ""
+                                visible: modelData.downloads && modelData.downloads.length > 0
                                 color: Kirigami.Theme.disabledTextColor
                                 font.pointSize: Kirigami.Theme.smallFont.pointSize
                             }
@@ -582,86 +590,19 @@ Item {
                         }
                     }
                     Button {
-                        text: i18n("Pull")
+                        text: JarvisBackend.llmProvider === "ollama" ? i18n("Pull") : i18n("Download")
                         icon.name: "download"
                         enabled: !JarvisBackend.downloading
-                        onClicked: JarvisBackend.pullOllamaModel(modelData.id)
+                        onClicked: {
+                            if (JarvisBackend.llmProvider === "ollama") {
+                                JarvisBackend.pullOllamaModel("hf.co/" + modelData.id)
+                            } else {
+                                JarvisBackend.downloadLlmModel(modelData.id)
+                            }
+                        }
                     }
                 }
             }
-        }
-
-        // ════════════════════════════════════════
-        // LLM MODELS (llama.cpp GGUF download)
-        // ════════════════════════════════════════
-        Kirigami.FormLayout {
-            Component.onCompleted: { for (var i = 0; i < children.length; i++) { if (children[i].hasOwnProperty("columns")) { children[i].anchors.horizontalCenter = undefined; children[i].anchors.left = left; children[i].anchors.leftMargin = Qt.binding(function() { return Kirigami.Units.smallSpacing; }); } } }
-            Layout.fillWidth: true
-            visible: JarvisBackend.llmProvider === "llamacpp"
-
-            Kirigami.Separator {
-                Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18n("Download GGUF Models")
-            }
-
-            Label {
-                text: i18n("Download models for llama.cpp. Smaller = faster, larger = smarter.")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-            }
-        }
-
-        Repeater {
-            model: JarvisBackend.llmProvider === "llamacpp" ? JarvisBackend.availableLlmModels : []
-            delegate: Kirigami.AbstractCard {
-                visible: !modelData.downloaded
-                Layout.fillWidth: true
-                Layout.leftMargin: Kirigami.Units.smallSpacing
-                Layout.rightMargin: Kirigami.Units.smallSpacing
-                contentItem: RowLayout {
-                    spacing: Kirigami.Units.largeSpacing
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 2
-                        RowLayout {
-                            spacing: Kirigami.Units.smallSpacing
-                            Label {
-                                text: modelData.name
-                                font.bold: true
-                            }
-                            Label {
-                                text: modelData.size
-                                color: Kirigami.Theme.disabledTextColor
-                                font.pointSize: Kirigami.Theme.smallFont.pointSize
-                            }
-                        }
-                        Label {
-                            text: modelData.desc
-                            color: Kirigami.Theme.disabledTextColor
-                            font.pointSize: Kirigami.Theme.smallFont.pointSize
-                            Layout.fillWidth: true
-                            wrapMode: Text.Wrap
-                        }
-                    }
-                    Button {
-                        text: i18n("Download")
-                        icon.name: "download"
-                        enabled: !JarvisBackend.downloading
-                        onClicked: JarvisBackend.downloadLlmModel(modelData.id)
-                    }
-                }
-            }
-        }
-
-        Button {
-            text: i18n("Fetch More Models")
-            icon.name: "list-add"
-            visible: JarvisBackend.llmProvider === "llamacpp"
-            Layout.leftMargin: Kirigami.Units.largeSpacing
-            Layout.topMargin: Kirigami.Units.smallSpacing
-            onClicked: JarvisBackend.fetchMoreModels()
         }
 
         // Bottom spacer

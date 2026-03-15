@@ -51,6 +51,11 @@ JarvisSettings::JarvisSettings(QNetworkAccessManager *nam, QObject *parent)
         fetchCloudModels();
     }
     populateVoiceList();
+
+    // Auto-search HuggingFace for initial results (for ollama/llamacpp)
+    if (m_llmProvider == QStringLiteral("ollama") || m_llmProvider == QStringLiteral("llamacpp")) {
+        searchHuggingFaceModels(QString());
+    }
 }
 
 // ─────────────────────────────────────────────
@@ -776,57 +781,112 @@ void JarvisSettings::fetchOllamaModels()
             });
         }
         emit availableLlmModelsChanged();
-        // Auto-fetch suggested models after installed list is ready
-        fetchSuggestedOllamaModels();
     });
 }
 
-void JarvisSettings::fetchSuggestedOllamaModels(const QString &query)
+void JarvisSettings::searchHuggingFaceModels(const QString &query)
 {
-    // Search ollama.com for available models
-    const QString searchUrl = query.isEmpty()
-        ? QStringLiteral("https://ollama.com/search")
-        : QStringLiteral("https://ollama.com/search?q=%1").arg(QString::fromUtf8(QUrl::toPercentEncoding(query)));
+    m_lastHfQuery = query;
+    const QString searchQuery = query.isEmpty()
+        ? QStringLiteral("gguf instruct")
+        : QStringLiteral("gguf %1").arg(query);
+
+    const QString searchUrl = QStringLiteral(
+        "https://huggingface.co/api/models?search=%1&sort=downloads&direction=-1&limit=20"
+    ).arg(QString::fromUtf8(QUrl::toPercentEncoding(searchQuery)));
 
     QNetworkRequest request{QUrl(searchUrl)};
-    request.setTransferTimeout(10000);
+    request.setTransferTimeout(15000);
 
     auto *reply = m_networkManager->get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) return;
 
-        const QString html = QString::fromUtf8(reply->readAll());
+        const QByteArray data = reply->readAll();
+        const QJsonArray models = QJsonDocument::fromJson(data).array();
 
-        // Parse model cards from HTML: href="/library/NAME" followed by description in <p>
-        static const QRegularExpression modelRe(
-            QStringLiteral("href=\"/library/([^\"]+)\"[^>]*>.*?<p[^>]*>([^<]*)</p>"),
-            QRegularExpression::DotMatchesEverythingOption);
-
-        // Get installed model names for filtering
+        // Build list of installed model names for filtering
         QStringList installed;
-        for (const auto &v : std::as_const(m_availableLlmModels))
-            installed << v.toMap()[QStringLiteral("id")].toString().split(':').first().toLower();
+        for (const auto &v : std::as_const(m_availableLlmModels)) {
+            const QString id = v.toMap()[QStringLiteral("id")].toString().toLower();
+            installed << id << id.split(':').first();
+        }
 
-        m_suggestedOllamaModels.clear();
-        auto it = modelRe.globalMatch(html);
-        while (it.hasNext()) {
-            const auto match = it.next();
-            const QString name = match.captured(1).trimmed();
-            const QString desc = match.captured(2).trimmed();
+        m_hfSearchResults.clear();
+        for (const auto &val : models) {
+            const QJsonObject obj = val.toObject();
+            const QString modelId = obj[QStringLiteral("modelId")].toString();
 
-            // Skip if already installed
-            if (installed.contains(name.split(':').first().toLower())) continue;
+            // Skip if already installed (check repo name against installed model names)
+            const QString repoName = modelId.section('/', -1).toLower();
+            bool alreadyInstalled = false;
+            for (const auto &inst : installed) {
+                if (inst.contains(repoName.left(repoName.indexOf('-')))
+                    || repoName.contains(inst.split(':').first())) {
+                    alreadyInstalled = true;
+                    break;
+                }
+            }
+            if (alreadyInstalled) continue;
+            const qint64 downloads = obj[QStringLiteral("downloads")].toVariant().toLongLong();
+            const QString pipelineTag = obj[QStringLiteral("pipeline_tag")].toString();
 
-            m_suggestedOllamaModels.append(QVariantMap{
-                {QStringLiteral("id"), name},
-                {QStringLiteral("name"), name},
-                {QStringLiteral("size"), QString()},
-                {QStringLiteral("desc"), desc},
+            // Format download count
+            QString dlStr;
+            if (downloads >= 1000000)
+                dlStr = QStringLiteral("%1M").arg(downloads / 1000000.0, 0, 'f', 1);
+            else if (downloads >= 1000)
+                dlStr = QStringLiteral("%1K").arg(downloads / 1000.0, 0, 'f', 1);
+            else
+                dlStr = QString::number(downloads);
+
+            // Try to find a .gguf file size from siblings
+            QString sizeStr;
+            const QJsonArray siblings = obj[QStringLiteral("siblings")].toArray();
+            for (const auto &sib : siblings) {
+                const QJsonObject sibObj = sib.toObject();
+                const QString fname = sibObj[QStringLiteral("rfilename")].toString();
+                if (fname.endsWith(QStringLiteral(".gguf")) && fname.contains(QStringLiteral("Q4_K_M"))) {
+                    const qint64 size = sibObj[QStringLiteral("size")].toVariant().toLongLong();
+                    if (size > 0) {
+                        sizeStr = QStringLiteral("%1 GB").arg(size / 1073741824.0, 0, 'f', 1);
+                    }
+                    break;
+                }
+            }
+            // Fallback: find any .gguf file
+            if (sizeStr.isEmpty()) {
+                for (const auto &sib : siblings) {
+                    const QJsonObject sibObj = sib.toObject();
+                    const QString fname = sibObj[QStringLiteral("rfilename")].toString();
+                    if (fname.endsWith(QStringLiteral(".gguf"))) {
+                        const qint64 size = sibObj[QStringLiteral("size")].toVariant().toLongLong();
+                        if (size > 0) {
+                            sizeStr = QStringLiteral("%1 GB").arg(size / 1073741824.0, 0, 'f', 1);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Build a friendly name from modelId (e.g. "bartowski/Llama-3.2-3B-Instruct-GGUF" -> "Llama 3.2 3B Instruct")
+            QString friendlyName = modelId.section('/', -1); // take part after last /
+            friendlyName.remove(QStringLiteral("-GGUF"), Qt::CaseInsensitive);
+            friendlyName.remove(QStringLiteral("_GGUF"), Qt::CaseInsensitive);
+            friendlyName.replace('-', ' ');
+            friendlyName.replace('_', ' ');
+
+            m_hfSearchResults.append(QVariantMap{
+                {QStringLiteral("id"), modelId},
+                {QStringLiteral("name"), friendlyName},
+                {QStringLiteral("size"), sizeStr},
+                {QStringLiteral("downloads"), dlStr},
+                {QStringLiteral("desc"), pipelineTag.isEmpty() ? QStringLiteral("GGUF model") : pipelineTag},
             });
         }
 
-        emit suggestedOllamaModelsChanged();
+        emit hfSearchResultsChanged();
     });
 }
 
@@ -836,60 +896,32 @@ void JarvisSettings::fetchSuggestedOllamaModels(const QString &query)
 
 void JarvisSettings::populateModelList()
 {
-    m_availableLlmModels = {
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("Qwen2.5-0.5B-Instruct-Q4_K_M")},
-            {QStringLiteral("name"), QStringLiteral("Qwen 2.5 0.5B (Tiny)")},
-            {QStringLiteral("size"), QStringLiteral("0.4 GB")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf")},
-            {QStringLiteral("desc"), QStringLiteral("Ultra-light, fast responses, basic quality")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("Qwen2.5-1.5B-Instruct-Q4_K_M")},
-            {QStringLiteral("name"), QStringLiteral("Qwen 2.5 1.5B (Small)")},
-            {QStringLiteral("size"), QStringLiteral("1.1 GB")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf")},
-            {QStringLiteral("desc"), QStringLiteral("Good balance of speed and quality")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("Qwen2.5-3B-Instruct-Q4_K_M")},
-            {QStringLiteral("name"), QStringLiteral("Qwen 2.5 3B (Medium)")},
-            {QStringLiteral("size"), QStringLiteral("2.0 GB")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf")},
-            {QStringLiteral("desc"), QStringLiteral("Better reasoning, moderate speed")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("Qwen2.5-7B-Instruct-Q4_K_M")},
-            {QStringLiteral("name"), QStringLiteral("Qwen 2.5 7B (Large)")},
-            {QStringLiteral("size"), QStringLiteral("4.7 GB")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf")},
-            {QStringLiteral("desc"), QStringLiteral("High quality, needs more RAM")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("Mistral-7B-Instruct-v0.3-Q4_K_M")},
-            {QStringLiteral("name"), QStringLiteral("Mistral 7B v0.3")},
-            {QStringLiteral("size"), QStringLiteral("4.4 GB")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf")},
-            {QStringLiteral("desc"), QStringLiteral("Excellent general assistant")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("Phi-3.5-mini-instruct-Q4_K_M")},
-            {QStringLiteral("name"), QStringLiteral("Phi 3.5 Mini (3.8B)")},
-            {QStringLiteral("size"), QStringLiteral("2.6 GB")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf")},
-            {QStringLiteral("desc"), QStringLiteral("Microsoft's compact powerhouse")}
-        },
-    };
+    m_availableLlmModels.clear();
 
     const QString modelsDir = jarvisDataDir() + QStringLiteral("/models");
-    QDir().mkpath(modelsDir);
-    for (auto &v : m_availableLlmModels) {
-        auto map = v.toMap();
-        const QString filename = map[QStringLiteral("id")].toString() + QStringLiteral(".gguf");
-        map[QStringLiteral("downloaded")] = QFile::exists(modelsDir + QStringLiteral("/") + filename);
-        map[QStringLiteral("active")] = (map[QStringLiteral("id")].toString() == m_currentModelName ||
-                                          map[QStringLiteral("name")].toString().contains(m_currentModelName));
-        v = map;
+    QDir dir(modelsDir);
+    dir.mkpath(QStringLiteral("."));
+
+    const QStringList ggufFiles = dir.entryList({QStringLiteral("*.gguf")}, QDir::Files, QDir::Name);
+    for (const QString &filename : ggufFiles) {
+        const QString id = filename.chopped(5); // remove ".gguf"
+        const QFileInfo fi(modelsDir + QStringLiteral("/") + filename);
+        const double sizeGb = fi.size() / 1073741824.0;
+        const QString sizeStr = QStringLiteral("%1 GB").arg(sizeGb, 0, 'f', 1);
+
+        // Build a friendly name from the filename
+        QString friendlyName = id;
+        friendlyName.replace('-', ' ');
+        friendlyName.replace('_', ' ');
+
+        m_availableLlmModels.append(QVariantMap{
+            {QStringLiteral("id"), id},
+            {QStringLiteral("name"), friendlyName},
+            {QStringLiteral("size"), sizeStr},
+            {QStringLiteral("downloaded"), true},
+            {QStringLiteral("active"), (id == m_currentModelName || friendlyName.contains(m_currentModelName))},
+            {QStringLiteral("desc"), QStringLiteral("Local GGUF model")},
+        });
     }
 }
 
@@ -952,72 +984,6 @@ void JarvisSettings::populateVoiceList()
 // ─────────────────────────────────────────────
 // Fetch More
 // ─────────────────────────────────────────────
-
-void JarvisSettings::fetchMoreModels()
-{
-    // Add extended model list
-    const QStringList existingIds = [this]() {
-        QStringList ids;
-        for (const auto &v : std::as_const(m_availableLlmModels))
-            ids << v.toMap()[QStringLiteral("id")].toString();
-        return ids;
-    }();
-
-    const QVariantList extra = {
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("Llama-3.2-1B-Instruct-Q4_K_M")},
-            {QStringLiteral("name"), QStringLiteral("Llama 3.2 1B (Tiny)")},
-            {QStringLiteral("size"), QStringLiteral("0.8 GB")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf")},
-            {QStringLiteral("desc"), QStringLiteral("Meta's compact Llama — fast and capable")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("Llama-3.2-3B-Instruct-Q4_K_M")},
-            {QStringLiteral("name"), QStringLiteral("Llama 3.2 3B (Small)")},
-            {QStringLiteral("size"), QStringLiteral("2.0 GB")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf")},
-            {QStringLiteral("desc"), QStringLiteral("Meta's Llama 3.2 — great quality for size")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("gemma-2-2b-it-Q4_K_M")},
-            {QStringLiteral("name"), QStringLiteral("Gemma 2 2B (Compact)")},
-            {QStringLiteral("size"), QStringLiteral("1.5 GB")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf")},
-            {QStringLiteral("desc"), QStringLiteral("Google's Gemma 2 — efficient and smart")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("gemma-2-9b-it-Q4_K_M")},
-            {QStringLiteral("name"), QStringLiteral("Gemma 2 9B (Large)")},
-            {QStringLiteral("size"), QStringLiteral("5.8 GB")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/bartowski/gemma-2-9b-it-GGUF/resolve/main/gemma-2-9b-it-Q4_K_M.gguf")},
-            {QStringLiteral("desc"), QStringLiteral("Google's Gemma 2 — top quality, needs RAM")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("SmolLM2-1.7B-Instruct-Q4_K_M")},
-            {QStringLiteral("name"), QStringLiteral("SmolLM2 1.7B")},
-            {QStringLiteral("size"), QStringLiteral("1.1 GB")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/bartowski/SmolLM2-1.7B-Instruct-GGUF/resolve/main/SmolLM2-1.7B-Instruct-Q4_K_M.gguf")},
-            {QStringLiteral("desc"), QStringLiteral("HuggingFace's tiny powerhouse")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("TinyLlama-1.1B-Chat-v1.0-Q4_K_M")},
-            {QStringLiteral("name"), QStringLiteral("TinyLlama 1.1B Chat")},
-            {QStringLiteral("size"), QStringLiteral("0.7 GB")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf")},
-            {QStringLiteral("desc"), QStringLiteral("Ultra-lightweight chat model")}
-        },
-    };
-
-    const QString modelsDir = jarvisDataDir() + QStringLiteral("/models");
-    for (const auto &v : extra) {
-        auto map = v.toMap();
-        if (existingIds.contains(map[QStringLiteral("id")].toString())) continue;
-        const QString filename = map[QStringLiteral("id")].toString() + QStringLiteral(".gguf");
-        map[QStringLiteral("downloaded")] = QFile::exists(modelsDir + QStringLiteral("/") + filename);
-        map[QStringLiteral("active")] = false;
-        m_availableLlmModels.append(map);
-    }
-}
 
 void JarvisSettings::fetchMoreVoices()
 {
@@ -1122,23 +1088,50 @@ void JarvisSettings::downloadLlmModel(const QString &modelId)
 {
     if (m_downloading) return;
 
+    // modelId is a HuggingFace model ID like "bartowski/Llama-3.2-3B-Instruct-GGUF"
+    // Look up in HF search results first, then fall back to availableLlmModels (legacy)
     QVariantMap targetModel;
-    for (const auto &v : std::as_const(m_availableLlmModels)) {
+    for (const auto &v : std::as_const(m_hfSearchResults)) {
         auto map = v.toMap();
         if (map[QStringLiteral("id")].toString() == modelId) {
             targetModel = map;
             break;
         }
     }
+    if (targetModel.isEmpty()) {
+        for (const auto &v : std::as_const(m_availableLlmModels)) {
+            auto map = v.toMap();
+            if (map[QStringLiteral("id")].toString() == modelId) {
+                targetModel = map;
+                break;
+            }
+        }
+    }
     if (targetModel.isEmpty()) return;
 
-    const QString url = targetModel[QStringLiteral("url")].toString();
+    // Construct GGUF download URL from HF model ID
+    // Format: https://huggingface.co/{modelId}/resolve/main/{filename}.gguf
+    // Prefer Q4_K_M quantization
+    QString url = targetModel[QStringLiteral("url")].toString();
+    if (url.isEmpty()) {
+        // Derive the GGUF filename — take the repo name part and look for Q4_K_M
+        const QString repoName = modelId.section('/', -1);
+        QString baseName = repoName;
+        baseName.remove(QStringLiteral("-GGUF"), Qt::CaseInsensitive);
+        baseName.remove(QStringLiteral("_GGUF"), Qt::CaseInsensitive);
+        const QString ggufFile = baseName + QStringLiteral("-Q4_K_M.gguf");
+        url = QStringLiteral("https://huggingface.co/%1/resolve/main/%2").arg(modelId, ggufFile);
+    }
+
+    // Use a filesystem-safe name derived from the model ID
+    const QString safeName = modelId.section('/', -1).remove(QStringLiteral("-GGUF"), Qt::CaseInsensitive)
+        .remove(QStringLiteral("_GGUF"), Qt::CaseInsensitive) + QStringLiteral("-Q4_K_M");
     const QString modelsDir = jarvisDataDir() + QStringLiteral("/models");
     QDir().mkpath(modelsDir);
-    const QString filePath = modelsDir + QStringLiteral("/") + modelId + QStringLiteral(".gguf");
+    const QString filePath = modelsDir + QStringLiteral("/") + safeName + QStringLiteral(".gguf");
 
     if (QFile::exists(filePath)) {
-        setActiveLlmModel(modelId);
+        setActiveLlmModel(safeName);
         return;
     }
 
@@ -1170,14 +1163,14 @@ void JarvisSettings::downloadLlmModel(const QString &modelId)
         }
     });
 
-    connect(m_downloadReply, &QNetworkReply::finished, this, [this, outFile, filePath, modelId]() {
+    connect(m_downloadReply, &QNetworkReply::finished, this, [this, outFile, filePath, safeName]() {
         outFile->close();
         outFile->deleteLater();
 
         if (m_downloadReply->error() == QNetworkReply::NoError) {
             QFile::rename(filePath + QStringLiteral(".part"), filePath);
             m_downloadStatus = QStringLiteral("Download complete!");
-            setActiveLlmModel(modelId);
+            setActiveLlmModel(safeName);
             populateModelList();
         } else {
             QFile::remove(filePath + QStringLiteral(".part"));
