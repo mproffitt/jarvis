@@ -111,29 +111,46 @@ Item {
                 font.pointSize: Kirigami.Theme.smallFont.pointSize
             }
 
-            Slider {
-                id: voiceCmdSlider
-                Kirigami.FormData.label: i18n("Max voice command length: %1 seconds", value.toFixed(0))
-                from: 3; to: 30; stepSize: 1
-                value: JarvisBackend.voiceCmdMaxSeconds
-                onMoved: JarvisBackend.setVoiceCmdMaxSeconds(value)
-            }
+        }
 
-            Slider {
-                id: silenceSlider
-                Kirigami.FormData.label: i18n("Silence timeout: %1 ms", value.toFixed(0))
-                from: 200; to: 3000; stepSize: 80
-                value: JarvisBackend.silenceTimeoutMs
-                onMoved: JarvisBackend.setSilenceTimeoutMs(value)
-            }
+        // Sliders outside FormLayout for full width
+        Label {
+            text: i18n("Max voice command length: %1 seconds").arg(voiceCmdSlider.value.toFixed(0))
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.topMargin: Kirigami.Units.smallSpacing
+        }
+        Slider {
+            id: voiceCmdSlider
+            Layout.fillWidth: true
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.rightMargin: Kirigami.Units.largeSpacing
+            from: 3; to: 30; stepSize: 1
+            value: JarvisBackend.voiceCmdMaxSeconds
+            onMoved: JarvisBackend.setVoiceCmdMaxSeconds(value)
+        }
 
-            Label {
-                text: i18n("How long to wait after you stop speaking before processing. Lower = faster response, higher = fewer false stops.")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-            }
+        Label {
+            text: i18n("Silence timeout: %1 ms").arg(silenceSlider.value.toFixed(0))
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+        }
+        Slider {
+            id: silenceSlider
+            Layout.fillWidth: true
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.rightMargin: Kirigami.Units.largeSpacing
+            from: 200; to: 3000; stepSize: 80
+            value: JarvisBackend.silenceTimeoutMs
+            onMoved: JarvisBackend.setSilenceTimeoutMs(value)
+        }
+
+        Label {
+            text: i18n("How long to wait after you stop speaking before processing. Lower = faster, higher = fewer false stops.")
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.rightMargin: Kirigami.Units.largeSpacing
+            color: Kirigami.Theme.disabledTextColor
+            font.pointSize: Kirigami.Theme.smallFont.pointSize
         }
 
         // Bottom spacer

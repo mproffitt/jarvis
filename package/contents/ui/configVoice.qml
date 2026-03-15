@@ -123,40 +123,63 @@ Item {
             Component.onCompleted: { for (var i = 0; i < children.length; i++) { if (children[i].hasOwnProperty("columns")) { children[i].anchors.horizontalCenter = undefined; children[i].anchors.left = left; children[i].anchors.leftMargin = Qt.binding(function() { return Kirigami.Units.smallSpacing; }); } } }
             Layout.fillWidth: true
 
-            Kirigami.Separator {
-                Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18n("Voice Synthesis Settings")
-            }
+        }
 
-            Slider {
-                id: rateSlider
-                Kirigami.FormData.label: i18n("Speech rate: %1", value.toFixed(2))
-                from: -1.0; to: 1.0; stepSize: 0.05
-                value: 0.05
-                onMoved: JarvisBackend.setTtsRate(value)
-            }
+        // Voice Synthesis Settings — outside FormLayout for full-width sliders
+        Kirigami.Heading {
+            text: i18n("Voice Synthesis Settings")
+            level: 4
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.topMargin: Kirigami.Units.largeSpacing
+        }
 
-            Slider {
-                id: pitchSlider
-                Kirigami.FormData.label: i18n("Speech pitch: %1", value.toFixed(2))
-                from: -1.0; to: 1.0; stepSize: 0.05
-                value: -0.1
-                onMoved: JarvisBackend.setTtsPitch(value)
-            }
+        Label {
+            text: i18n("Speech rate: %1").arg(rateSlider.value.toFixed(2))
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+        }
+        Slider {
+            id: rateSlider
+            Layout.fillWidth: true
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.rightMargin: Kirigami.Units.largeSpacing
+            from: -1.0; to: 1.0; stepSize: 0.05
+            value: 0.05
+            onMoved: JarvisBackend.setTtsRate(value)
+        }
 
-            Slider {
-                id: volumeSlider
-                Kirigami.FormData.label: i18n("Volume: %1%", (value * 100).toFixed(0))
-                from: 0.0; to: 1.0; stepSize: 0.05
-                value: 0.85
-                onMoved: JarvisBackend.setTtsVolume(value)
-            }
+        Label {
+            text: i18n("Speech pitch: %1").arg(pitchSlider.value.toFixed(2))
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+        }
+        Slider {
+            id: pitchSlider
+            Layout.fillWidth: true
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.rightMargin: Kirigami.Units.largeSpacing
+            from: -1.0; to: 1.0; stepSize: 0.05
+            value: -0.1
+            onMoved: JarvisBackend.setTtsPitch(value)
+        }
 
-            Button {
-                text: i18n("Test Current Voice")
-                icon.name: "media-playback-start"
-                onClicked: JarvisBackend.testVoice(JarvisBackend.currentVoiceName)
-            }
+        Label {
+            text: i18n("Volume: %1%").arg((volumeSlider.value * 100).toFixed(0))
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+        }
+        Slider {
+            id: volumeSlider
+            Layout.fillWidth: true
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.rightMargin: Kirigami.Units.largeSpacing
+            from: 0.0; to: 1.0; stepSize: 0.05
+            value: 0.85
+            onMoved: JarvisBackend.setTtsVolume(value)
+        }
+
+        Button {
+            text: i18n("Test Current Voice")
+            icon.name: "media-playback-start"
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            onClicked: JarvisBackend.testVoice(JarvisBackend.currentVoiceName)
         }
 
         // Bottom spacer

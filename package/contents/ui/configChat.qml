@@ -34,21 +34,36 @@ Item {
                 Kirigami.FormData.label: i18n("Chat Settings")
             }
 
-            Slider {
-                id: historySlider
-                Kirigami.FormData.label: i18n("Conversation memory: %1 message pairs", value.toFixed(0))
-                from: 5; to: 100; stepSize: 5
-                value: JarvisBackend.maxHistoryPairs
-                onMoved: JarvisBackend.setMaxHistoryPairs(value)
-            }
+        }
 
-            Label {
-                text: i18n("More pairs = better context memory but slower responses and more RAM usage.")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-            }
+        // Slider outside FormLayout for full width
+        Label {
+            text: i18n("Conversation memory: %1 message pairs").arg(historySlider.value.toFixed(0))
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+        }
+        Slider {
+            id: historySlider
+            Layout.fillWidth: true
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.rightMargin: Kirigami.Units.largeSpacing
+            from: 5; to: 100; stepSize: 5
+            value: JarvisBackend.maxHistoryPairs
+            onMoved: JarvisBackend.setMaxHistoryPairs(value)
+        }
+        Label {
+            text: i18n("More pairs = better context memory but slower responses and more RAM usage.")
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.rightMargin: Kirigami.Units.largeSpacing
+            color: Kirigami.Theme.disabledTextColor
+            font.pointSize: Kirigami.Theme.smallFont.pointSize
+        }
+
+        // Rest of chat settings in a new FormLayout
+        Kirigami.FormLayout {
+            Layout.fillWidth: true
+            Component.onCompleted: { for (var i = 0; i < children.length; i++) { if (children[i].hasOwnProperty("columns")) { children[i].anchors.horizontalCenter = undefined; children[i].anchors.left = left; children[i].anchors.leftMargin = Qt.binding(function() { return Kirigami.Units.smallSpacing; }); } } }
 
             RowLayout {
                 Kirigami.FormData.label: i18n("History:")
