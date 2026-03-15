@@ -29,6 +29,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     TextToSpeech
     Multimedia
     Concurrent
+    DBus
 )
 
 find_package(KF6 REQUIRED COMPONENTS

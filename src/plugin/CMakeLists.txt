@@ -28,6 +28,7 @@ target_link_libraries(jarvis_plugin
     Qt6::TextToSpeech
     Qt6::Multimedia
     Qt6::Concurrent
+    Qt6::DBus
     Plasma::Plasma
     KF6::I18n
     KF6::Wallet

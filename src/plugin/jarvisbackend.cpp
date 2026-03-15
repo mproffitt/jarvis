@@ -7,6 +7,8 @@
 #include "rag/jarvisrag.h"
 #include "mcp/jarvismcp.h"
 
+#include <QDBusInterface>
+#include <QDBusReply>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -559,6 +561,104 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
         setStatus("Yes? I'm listening.");
         speak(QStringLiteral("Yes?"));
         return;
+    }
+
+    // KDE Connect commands
+    {
+        const QString lower = command.toLower();
+        static const QRegularExpression findPhoneRe(
+            QStringLiteral("(?:find|ring|where(?:'s| is)) (?:my )?phone"),
+            QRegularExpression::CaseInsensitiveOption);
+        static const QRegularExpression pingPhoneRe(
+            QStringLiteral("ping (?:my )?phone"),
+            QRegularExpression::CaseInsensitiveOption);
+        static const QRegularExpression batteryRe(
+            QStringLiteral("(?:phone )?battery|battery (?:on )?(?:my )?phone"),
+            QRegularExpression::CaseInsensitiveOption);
+        static const QRegularExpression sendToPhoneRe(
+            QStringLiteral("send (?:this |that |it )?to (?:my )?phone"),
+            QRegularExpression::CaseInsensitiveOption);
+
+        bool isKdeConnect = false;
+        QString kdeConnectAction;
+
+        if (findPhoneRe.match(lower).hasMatch()) {
+            kdeConnectAction = QStringLiteral("find");
+            isKdeConnect = true;
+        } else if (pingPhoneRe.match(lower).hasMatch()) {
+            kdeConnectAction = QStringLiteral("ping");
+            isKdeConnect = true;
+        } else if (batteryRe.match(lower).hasMatch()) {
+            kdeConnectAction = QStringLiteral("battery");
+            isKdeConnect = true;
+        } else if (sendToPhoneRe.match(lower).hasMatch()) {
+            kdeConnectAction = QStringLiteral("share");
+            isKdeConnect = true;
+        }
+
+        if (isKdeConnect) {
+            // Find first paired and reachable device via D-Bus
+            QDBusInterface daemon(QStringLiteral("org.kde.kdeconnect"),
+                QStringLiteral("/modules/kdeconnect"),
+                QStringLiteral("org.kde.kdeconnect.daemon"));
+            const auto devicesReply = daemon.call(QStringLiteral("devices"));
+            const QStringList deviceIds = devicesReply.arguments().isEmpty()
+                ? QStringList{} : devicesReply.arguments().first().toStringList();
+
+            QString targetDevice;
+            QString deviceName;
+            for (const auto &id : deviceIds) {
+                QDBusInterface dev(QStringLiteral("org.kde.kdeconnect"),
+                    QStringLiteral("/modules/kdeconnect/devices/%1").arg(id),
+                    QStringLiteral("org.kde.kdeconnect.device"));
+                if (dev.property("isReachable").toBool() && dev.property("isPaired").toBool()) {
+                    targetDevice = id;
+                    deviceName = dev.property("name").toString();
+                    break;
+                }
+            }
+
+            if (targetDevice.isEmpty()) {
+                speak(QStringLiteral("I can't reach your phone right now."));
+                setStatus("Phone not connected.");
+                return;
+            }
+
+            if (kdeConnectAction == QStringLiteral("find")) {
+                QDBusInterface plugin(QStringLiteral("org.kde.kdeconnect"),
+                    QStringLiteral("/modules/kdeconnect/devices/%1/findmyphone").arg(targetDevice),
+                    QStringLiteral("org.kde.kdeconnect.device.findmyphone"));
+                plugin.call(QStringLiteral("ring"));
+                speak(QStringLiteral("Ringing %1.").arg(deviceName));
+            } else if (kdeConnectAction == QStringLiteral("ping")) {
+                QDBusInterface plugin(QStringLiteral("org.kde.kdeconnect"),
+                    QStringLiteral("/modules/kdeconnect/devices/%1/ping").arg(targetDevice),
+                    QStringLiteral("org.kde.kdeconnect.device.ping"));
+                plugin.call(QStringLiteral("sendPing"));
+                speak(QStringLiteral("Pinged %1.").arg(deviceName));
+            } else if (kdeConnectAction == QStringLiteral("battery")) {
+                QDBusInterface plugin(QStringLiteral("org.kde.kdeconnect"),
+                    QStringLiteral("/modules/kdeconnect/devices/%1/battery").arg(targetDevice),
+                    QStringLiteral("org.kde.kdeconnect.device.battery"));
+                const int charge = plugin.property("charge").toInt();
+                const bool charging = plugin.property("isCharging").toBool();
+                speak(QStringLiteral("%1 is at %2 percent%3.")
+                    .arg(deviceName).arg(charge)
+                    .arg(charging ? QStringLiteral(" and charging") : QString()));
+            } else if (kdeConnectAction == QStringLiteral("share")) {
+                QDBusInterface plugin(QStringLiteral("org.kde.kdeconnect"),
+                    QStringLiteral("/modules/kdeconnect/devices/%1/share").arg(targetDevice),
+                    QStringLiteral("org.kde.kdeconnect.device.share"));
+                // Share clipboard content
+                QDBusInterface clipboard(QStringLiteral("org.kde.kdeconnect"),
+                    QStringLiteral("/modules/kdeconnect/devices/%1/clipboard").arg(targetDevice),
+                    QStringLiteral("org.kde.kdeconnect.device.clipboard"));
+                clipboard.call(QStringLiteral("sendClipboard"));
+                speak(QStringLiteral("Sent clipboard to %1.").arg(deviceName));
+            }
+            setStatus(QStringLiteral("KDE Connect: %1").arg(deviceName));
+            return;
+        }
     }
 
     // Try system commands first
