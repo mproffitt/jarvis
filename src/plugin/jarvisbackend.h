@@ -322,6 +322,7 @@ private:
     void finalizeStreamingResponse();
     static int estimateTokenCount(const QString &text) { return text.length() / 4; }
     void trimConversationToTokenLimit();
+    void handleScreenContext(const QString &question);
     void saveChatHistory();
     void loadChatHistory();
 

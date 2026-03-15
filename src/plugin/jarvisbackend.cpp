@@ -546,6 +546,17 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
         return;
     }
 
+    // Screen context — "what's on my screen", "look at my screen", etc.
+    static const QRegularExpression screenRe(
+        QStringLiteral("(?:what(?:'s| is) on (?:my |the )?screen|look at (?:my |the )?screen|"
+                        "describe (?:my |the )?screen|screenshot|what(?:'s| is) this|"
+                        "what am i looking at|can you see (?:my |the )?screen)"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (screenRe.match(command).hasMatch()) {
+        handleScreenContext(command);
+        return;
+    }
+
     // Music — "play X" asks LLM for a specific search term, then opens Spotify
     static const QRegularExpression playRe(
         QStringLiteral("^(?:play|put on|listen to|queue)\\s+(.+)"),
@@ -1200,6 +1211,182 @@ void JarvisBackend::checkReminders()
 // ─────────────────────────────────────────────
 // Misc
 // ─────────────────────────────────────────────
+// Screen Context (Vision)
+// ─────────────────────────────────────────────
+
+void JarvisBackend::handleScreenContext(const QString &question)
+{
+    setStatus("Capturing screen...");
+    speak(QStringLiteral("Let me take a look."));
+
+    const QString screenshotPath = QDir::tempPath() + QStringLiteral("/jarvis_screenshot.png");
+
+    // Capture screenshot using spectacle (KDE) — works on Wayland
+    auto *proc = new QProcess(this);
+    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, proc, screenshotPath, question](int exitCode, QProcess::ExitStatus) {
+        proc->deleteLater();
+
+        if (exitCode != 0 || !QFile::exists(screenshotPath)) {
+            speak(QStringLiteral("Sorry, I couldn't capture the screen."));
+            setStatus("Screenshot failed.");
+            return;
+        }
+
+        // Read and base64-encode the image
+        QFile imgFile(screenshotPath);
+        if (!imgFile.open(QIODevice::ReadOnly)) {
+            speak(QStringLiteral("Sorry, I couldn't read the screenshot."));
+            return;
+        }
+        const QByteArray imageData = imgFile.readAll();
+        imgFile.close();
+        QFile::remove(screenshotPath);
+
+        // Resize if too large (>2MB) — scale down for faster upload
+        const QString base64 = QString::fromLatin1(imageData.toBase64());
+
+        setStatus("Analysing screen...");
+
+        // Build the vision request based on provider
+        QJsonObject requestBody;
+        QUrl url;
+        QNetworkRequest request;
+
+        const QString userText = question.isEmpty()
+            ? QStringLiteral("What do you see on this screen? Describe it briefly.")
+            : question;
+
+        if (m_settings->isClaudeProvider()) {
+            // Claude vision format
+            QJsonArray content;
+            content.append(QJsonObject{
+                {QStringLiteral("type"), QStringLiteral("image")},
+                {QStringLiteral("source"), QJsonObject{
+                    {QStringLiteral("type"), QStringLiteral("base64")},
+                    {QStringLiteral("media_type"), QStringLiteral("image/png")},
+                    {QStringLiteral("data"), base64},
+                }},
+            });
+            content.append(QJsonObject{
+                {QStringLiteral("type"), QStringLiteral("text")},
+                {QStringLiteral("text"), userText},
+            });
+
+            requestBody[QStringLiteral("messages")] = QJsonArray{
+                QJsonObject{
+                    {QStringLiteral("role"), QStringLiteral("user")},
+                    {QStringLiteral("content"), content},
+                },
+            };
+            requestBody[QStringLiteral("system")] = buildSystemPrompt(m_currentRagContext);
+            requestBody[QStringLiteral("max_tokens")] = 1024;
+            requestBody[QStringLiteral("stream")] = false;
+
+            QString modelId = m_settings->llmModelId();
+            if (modelId.isEmpty()) modelId = QStringLiteral("claude-sonnet-4-20250514");
+            requestBody[QStringLiteral("model")] = modelId;
+
+            url = QUrl(m_settings->chatCompletionsUrl());
+            request.setUrl(url);
+            request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+            request.setTransferTimeout(60000);
+
+            const QString apiKey = m_settings->activeApiKey();
+            if (apiKey.startsWith(QStringLiteral("sk-ant-oat"))) {
+                request.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+                request.setRawHeader("anthropic-beta", "oauth-2025-04-20");
+            } else {
+                request.setRawHeader("x-api-key", apiKey.toUtf8());
+            }
+            request.setRawHeader("anthropic-version", "2023-06-01");
+
+        } else {
+            // OpenAI / Ollama vision format (GPT-4o, llava, etc.)
+            QJsonArray content;
+            content.append(QJsonObject{
+                {QStringLiteral("type"), QStringLiteral("text")},
+                {QStringLiteral("text"), userText},
+            });
+            content.append(QJsonObject{
+                {QStringLiteral("type"), QStringLiteral("image_url")},
+                {QStringLiteral("image_url"), QJsonObject{
+                    {QStringLiteral("url"), QStringLiteral("data:image/png;base64,%1").arg(base64)},
+                }},
+            });
+
+            requestBody[QStringLiteral("messages")] = QJsonArray{
+                QJsonObject{
+                    {QStringLiteral("role"), QStringLiteral("user")},
+                    {QStringLiteral("content"), content},
+                },
+            };
+            requestBody[QStringLiteral("max_tokens")] = 1024;
+            requestBody[QStringLiteral("stream")] = false;
+
+            const QString modelId = m_settings->llmModelId();
+            if (!modelId.isEmpty())
+                requestBody[QStringLiteral("model")] = modelId;
+
+            url = QUrl(m_settings->chatCompletionsUrl());
+            request.setUrl(url);
+            request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+            request.setTransferTimeout(60000);
+
+            if (m_settings->providerNeedsApiKey()) {
+                const QString apiKey = m_settings->activeApiKey();
+                request.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(apiKey).toUtf8());
+            }
+        }
+
+        auto *visionReply = m_networkManager->post(request, QJsonDocument(requestBody).toJson());
+        connect(visionReply, &QNetworkReply::finished, this, [this, visionReply]() {
+            visionReply->deleteLater();
+
+            if (visionReply->error() != QNetworkReply::NoError) {
+                qWarning() << "[JARVIS] Vision request failed:" << visionReply->errorString();
+                speak(QStringLiteral("Sorry, I couldn't analyse the screen."));
+                setStatus("Vision request failed.");
+                return;
+            }
+
+            const auto doc = QJsonDocument::fromJson(visionReply->readAll());
+            QString text;
+
+            // OpenAI/Ollama format
+            text = doc.object()[QStringLiteral("choices")].toArray()
+                .first().toObject()[QStringLiteral("message")].toObject()
+                [QStringLiteral("content")].toString().trimmed();
+
+            // Claude format
+            if (text.isEmpty()) {
+                const auto content = doc.object()[QStringLiteral("content")].toArray();
+                for (const auto &c : content) {
+                    if (c.toObject()[QStringLiteral("type")] == QStringLiteral("text"))
+                        text = c.toObject()[QStringLiteral("text")].toString().trimmed();
+                }
+            }
+
+            if (text.isEmpty()) {
+                speak(QStringLiteral("Sorry, I couldn't make sense of what I see."));
+                setStatus("Ready.");
+                return;
+            }
+
+            m_lastResponse = text;
+            emit lastResponseChanged();
+            addToChatHistory(QStringLiteral("user"), QStringLiteral("[screenshot]"));
+            addToChatHistory(QStringLiteral("assistant"), text);
+            speak(text);
+            setStatus("Ready.");
+        });
+    });
+
+    // Capture: fullscreen, background mode, no notification
+    proc->start(QStringLiteral("spectacle"), {
+        QStringLiteral("-b"), QStringLiteral("-n"), QStringLiteral("-f"),
+        QStringLiteral("-o"), screenshotPath});
+}
 
 void JarvisBackend::clearHistory()
 {
