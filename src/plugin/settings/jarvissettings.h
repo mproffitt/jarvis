@@ -113,8 +113,8 @@ public:
     [[nodiscard]] QVariantList cloudModelChoices() const { return m_cloudModelChoices; }
     void fetchCloudModels();
     void populateModelList();
-    void populateVoiceList();
-    void fetchMoreVoices();
+    void fetchPiperVoices(const QString &langFilter = {}, const QString &qualityFilter = {});
+    void fetchCommunityVoices();
     void fetchOllamaModels();
 
 signals:
@@ -147,6 +147,7 @@ signals:
     void ttsPitchChanged();
     void ttsVolumeChanged();
     void ttsMutedChanged();
+    void availableTtsVoicesChanged();
     void voiceActivated(const QString &voiceId, const QString &onnxPath);
     void cloudModelChoicesChanged();
     void oauthTokenReady();
@@ -203,4 +204,5 @@ private:
     QVariantList m_cloudModelChoices;
     QVariantList m_hfSearchResults;
     QString m_lastHfQuery;
+    QString m_voiceLangFilter;
 };

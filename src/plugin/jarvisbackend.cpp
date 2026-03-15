@@ -233,6 +233,7 @@ void JarvisBackend::connectModuleSignals()
     connect(m_settings, &JarvisSettings::downloadStatusChanged, this, &JarvisBackend::downloadStatusChanged);
     connect(m_settings, &JarvisSettings::availableLlmModelsChanged, this, &JarvisBackend::availableLlmModelsChanged);
     connect(m_settings, &JarvisSettings::hfSearchResultsChanged, this, &JarvisBackend::hfSearchResultsChanged);
+    connect(m_settings, &JarvisSettings::availableTtsVoicesChanged, this, &JarvisBackend::availableTtsVoicesChanged);
     connect(m_settings, &JarvisSettings::maxHistoryPairsChanged, this, &JarvisBackend::maxHistoryPairsChanged);
     connect(m_settings, &JarvisSettings::wakeBufferSecondsChanged, this, [this]() {
         m_audio->updateWakeBufferInterval(m_settings->wakeBufferSeconds());
@@ -541,10 +542,9 @@ void JarvisBackend::testVoice(const QString &voiceId)
     proc->start(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), cmd});
 }
 
-void JarvisBackend::fetchMoreVoices()
+void JarvisBackend::searchVoices(const QString &langFilter, const QString &qualityFilter)
 {
-    m_settings->fetchMoreVoices();
-    emit availableTtsVoicesChanged();
+    m_settings->fetchPiperVoices(langFilter, qualityFilter);
 }
 
 // OAuth delegated methods

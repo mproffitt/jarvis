@@ -50,7 +50,7 @@ JarvisSettings::JarvisSettings(QNetworkAccessManager *nam, QObject *parent)
     } else {
         fetchCloudModels();
     }
-    populateVoiceList();
+    fetchPiperVoices(QStringLiteral("en"));
 
     // Auto-search HuggingFace for initial results (for ollama/llamacpp)
     if (m_llmProvider == QStringLiteral("ollama") || m_llmProvider == QStringLiteral("llamacpp")) {
@@ -925,159 +925,166 @@ void JarvisSettings::populateModelList()
     }
 }
 
-void JarvisSettings::populateVoiceList()
+void JarvisSettings::fetchPiperVoices(const QString &langFilter, const QString &qualityFilter)
 {
-    m_availableTtsVoices = {
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("en_GB-alan-medium")},
-            {QStringLiteral("name"), QStringLiteral("Alan (British Male)")},
-            {QStringLiteral("lang"), QStringLiteral("English (UK)")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("Recommended — closest to J.A.R.V.I.S.")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("en_GB-cori-high")},
-            {QStringLiteral("name"), QStringLiteral("Cori (British Female)")},
-            {QStringLiteral("lang"), QStringLiteral("English (UK)")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/cori/high/en_GB-cori-high.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/cori/high/en_GB-cori-high.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("British female — F.R.I.D.A.Y. style")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("en_US-joe-medium")},
-            {QStringLiteral("name"), QStringLiteral("Joe (American Male)")},
-            {QStringLiteral("lang"), QStringLiteral("English (US)")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/joe/medium/en_US-joe-medium.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/joe/medium/en_US-joe-medium.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("Warm American male voice")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("en_US-amy-medium")},
-            {QStringLiteral("name"), QStringLiteral("Amy (American Female)")},
-            {QStringLiteral("lang"), QStringLiteral("English (US)")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("Clear American female voice")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("en_GB-semaine-medium")},
-            {QStringLiteral("name"), QStringLiteral("Semaine (British Multi)")},
-            {QStringLiteral("lang"), QStringLiteral("English (UK)")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/semaine/medium/en_GB-semaine-medium.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/semaine/medium/en_GB-semaine-medium.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("Expressive British voice")}
-        },
-    };
+    m_voiceLangFilter = langFilter;
 
-    const QString voicesDir = jarvisDataDir() + QStringLiteral("/piper-voices");
-    QDir().mkpath(voicesDir);
-    for (auto &v : m_availableTtsVoices) {
-        auto map = v.toMap();
-        const QString filename = map[QStringLiteral("id")].toString() + QStringLiteral(".onnx");
-        map[QStringLiteral("downloaded")] = QFile::exists(voicesDir + QStringLiteral("/") + filename);
-        map[QStringLiteral("active")] = (map[QStringLiteral("id")].toString() == m_currentVoiceName);
-        v = map;
-    }
+    QNetworkRequest request{QUrl(QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/voices.json"))};
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    auto *reply = m_networkManager->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, langFilter, qualityFilter]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            qWarning() << "[JARVIS] Failed to fetch piper voices:" << reply->errorString();
+            return;
+        }
+
+        const auto doc = QJsonDocument::fromJson(reply->readAll());
+        const auto voices = doc.object();
+        const QString voicesDir = jarvisDataDir() + QStringLiteral("/piper-voices");
+        QDir().mkpath(voicesDir);
+
+        m_availableTtsVoices.clear();
+
+        const QString baseUrl = QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/");
+
+        for (auto it = voices.begin(); it != voices.end(); ++it) {
+            const auto v = it.value().toObject();
+            const QString voiceId = v[QStringLiteral("key")].toString();
+            const QString name = v[QStringLiteral("name")].toString();
+            const QString quality = v[QStringLiteral("quality")].toString();
+            const auto langObj = v[QStringLiteral("language")].toObject();
+            const QString langFamily = langObj[QStringLiteral("family")].toString();
+            const QString langCode = langObj[QStringLiteral("code")].toString();
+            const QString langEnglish = langObj[QStringLiteral("name_english")].toString();
+            const QString countryEnglish = langObj[QStringLiteral("country_english")].toString();
+
+            // Apply filters
+            if (!langFilter.isEmpty() && langFamily != langFilter) continue;
+            if (!qualityFilter.isEmpty() && quality != qualityFilter) continue;
+
+            // Find the .onnx file path and size
+            QString onnxPath;
+            qint64 sizeBytes = 0;
+            const auto files = v[QStringLiteral("files")].toObject();
+            for (auto fit = files.begin(); fit != files.end(); ++fit) {
+                if (fit.key().endsWith(QStringLiteral(".onnx")) && !fit.key().endsWith(QStringLiteral(".onnx.json"))) {
+                    onnxPath = fit.key();
+                    sizeBytes = fit.value().toObject()[QStringLiteral("size_bytes")].toVariant().toLongLong();
+                    break;
+                }
+            }
+            if (onnxPath.isEmpty()) continue;
+
+            // Build friendly name
+            QString displayName = name;
+            displayName.replace(QLatin1Char('_'), QLatin1Char(' '));
+            if (!displayName.isEmpty()) displayName[0] = displayName[0].toUpper();
+
+            const QString langDisplay = countryEnglish.isEmpty()
+                ? langEnglish : langEnglish + QStringLiteral(" (") + countryEnglish + QStringLiteral(")");
+            const QString sizeStr = sizeBytes > 0
+                ? QStringLiteral("%1 MB").arg(sizeBytes / 1048576.0, 0, 'f', 0) : QString();
+
+            const QString filename = voiceId + QStringLiteral(".onnx");
+            const bool downloaded = QFile::exists(voicesDir + QStringLiteral("/") + filename);
+            const bool active = (voiceId == m_currentVoiceName);
+
+            m_availableTtsVoices.append(QVariantMap{
+                {QStringLiteral("id"), voiceId},
+                {QStringLiteral("name"), displayName},
+                {QStringLiteral("lang"), langDisplay},
+                {QStringLiteral("quality"), quality},
+                {QStringLiteral("size"), sizeStr},
+                {QStringLiteral("desc"), quality + QStringLiteral(" quality")},
+                {QStringLiteral("url"), baseUrl + onnxPath},
+                {QStringLiteral("urlJson"), baseUrl + onnxPath + QStringLiteral(".json")},
+                {QStringLiteral("downloaded"), downloaded},
+                {QStringLiteral("active"), active},
+            });
+        }
+
+        emit availableTtsVoicesChanged();
+
+        // Also fetch community voices
+        fetchCommunityVoices();
+    });
 }
 
-// ─────────────────────────────────────────────
-// Fetch More
-// ─────────────────────────────────────────────
-
-void JarvisSettings::fetchMoreVoices()
+void JarvisSettings::fetchCommunityVoices()
 {
-    const QStringList existingIds = [this]() {
-        QStringList ids;
-        for (const auto &v : std::as_const(m_availableTtsVoices))
-            ids << v.toMap()[QStringLiteral("id")].toString();
-        return ids;
-    }();
+    // Search HuggingFace for community piper voice repos
+    QNetworkRequest request{QUrl(QStringLiteral(
+        "https://huggingface.co/api/models?search=piper+voice+onnx&sort=downloads&direction=-1&limit=30"))};
+    request.setTransferTimeout(10000);
 
-    const QVariantList extra = {
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("en_GB-northern_english_male-medium")},
-            {QStringLiteral("name"), QStringLiteral("Northern English Male")},
-            {QStringLiteral("lang"), QStringLiteral("English (UK)")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/northern_english_male/medium/en_GB-northern_english_male-medium.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/northern_english_male/medium/en_GB-northern_english_male-medium.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("Northern English accent — warm tone")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("en_US-lessac-medium")},
-            {QStringLiteral("name"), QStringLiteral("Lessac (American)")},
-            {QStringLiteral("lang"), QStringLiteral("English (US)")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("Professional American voice")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("en_US-libritts_r-medium")},
-            {QStringLiteral("name"), QStringLiteral("LibriTTS (American Multi)")},
-            {QStringLiteral("lang"), QStringLiteral("English (US)")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts_r/medium/en_US-libritts_r-medium.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts_r/medium/en_US-libritts_r-medium.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("Multi-speaker American voice")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("en_US-ryan-medium")},
-            {QStringLiteral("name"), QStringLiteral("Ryan (American Male)")},
-            {QStringLiteral("lang"), QStringLiteral("English (US)")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("Confident American male")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("en_GB-jenny_dioco-medium")},
-            {QStringLiteral("name"), QStringLiteral("Jenny (British Female)")},
-            {QStringLiteral("lang"), QStringLiteral("English (UK)")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/jenny_dioco/medium/en_GB-jenny_dioco-medium.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/jenny_dioco/medium/en_GB-jenny_dioco-medium.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("Soft-spoken British female")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("de_DE-thorsten-medium")},
-            {QStringLiteral("name"), QStringLiteral("Thorsten (German Male)")},
-            {QStringLiteral("lang"), QStringLiteral("Deutsch")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("German male voice")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("fr_FR-siwis-medium")},
-            {QStringLiteral("name"), QStringLiteral("Siwis (French)")},
-            {QStringLiteral("lang"), QStringLiteral("Français")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("French voice")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("es_ES-davefx-medium")},
-            {QStringLiteral("name"), QStringLiteral("DaveFX (Spanish)")},
-            {QStringLiteral("lang"), QStringLiteral("Español")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("Spanish male voice")}
-        },
-        QVariantMap{
-            {QStringLiteral("id"), QStringLiteral("pl_PL-gosia-medium")},
-            {QStringLiteral("name"), QStringLiteral("Gosia (Polish Female)")},
-            {QStringLiteral("lang"), QStringLiteral("Polski")},
-            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/pl/pl_PL/gosia/medium/pl_PL-gosia-medium.onnx")},
-            {QStringLiteral("urlJson"), QStringLiteral("https://huggingface.co/rhasspy/piper-voices/resolve/main/pl/pl_PL/gosia/medium/pl_PL-gosia-medium.onnx.json")},
-            {QStringLiteral("desc"), QStringLiteral("Polish female voice")}
-        },
-    };
+    auto *reply = m_networkManager->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) return;
 
-    const QString voicesDir = jarvisDataDir() + QStringLiteral("/piper-voices");
-    for (const auto &v : extra) {
-        auto map = v.toMap();
-        if (existingIds.contains(map[QStringLiteral("id")].toString())) continue;
-        const QString filename = map[QStringLiteral("id")].toString() + QStringLiteral(".onnx");
-        map[QStringLiteral("downloaded")] = QFile::exists(voicesDir + QStringLiteral("/") + filename);
-        map[QStringLiteral("active")] = false;
-        m_availableTtsVoices.append(map);
-    }
+        const auto models = QJsonDocument::fromJson(reply->readAll()).array();
+        const QString voicesDir = jarvisDataDir() + QStringLiteral("/piper-voices");
+        bool added = false;
+
+        for (const auto &val : models) {
+            const auto obj = val.toObject();
+            const QString repoId = obj[QStringLiteral("modelId")].toString();
+
+            // Skip the official repo and forks/mirrors
+            if (repoId == QStringLiteral("rhasspy/piper-voices")) continue;
+            if (repoId.endsWith(QStringLiteral("/piper-voices"))) continue;
+
+            // Check siblings for .onnx files
+            const auto siblings = obj[QStringLiteral("siblings")].toArray();
+            for (const auto &sib : siblings) {
+                const QString fname = sib.toObject()[QStringLiteral("rfilename")].toString();
+                if (!fname.endsWith(QStringLiteral(".onnx")) || fname.endsWith(QStringLiteral(".onnx.json")))
+                    continue;
+
+                // Derive voice ID from filename
+                QString voiceId = fname;
+                voiceId = voiceId.section('/', -1); // take filename only
+                voiceId.chop(5); // remove .onnx
+                if (voiceId == QStringLiteral("model")) voiceId = repoId.section('/', -1);
+
+                // Check if already in list
+                bool duplicate = false;
+                for (const auto &v : std::as_const(m_availableTtsVoices)) {
+                    if (v.toMap()[QStringLiteral("id")].toString() == voiceId) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate) continue;
+
+                const QString baseUrl = QStringLiteral("https://huggingface.co/%1/resolve/main/").arg(repoId);
+                const bool downloaded = QFile::exists(voicesDir + QStringLiteral("/") + voiceId + QStringLiteral(".onnx"));
+                const bool active = (voiceId == m_currentVoiceName);
+
+                // Try to build a friendly name
+                QString displayName = voiceId;
+                displayName.replace(QLatin1Char('-'), QLatin1Char(' '));
+                displayName.replace(QLatin1Char('_'), QLatin1Char(' '));
+
+                m_availableTtsVoices.append(QVariantMap{
+                    {QStringLiteral("id"), voiceId},
+                    {QStringLiteral("name"), displayName},
+                    {QStringLiteral("lang"), QStringLiteral("Community")},
+                    {QStringLiteral("quality"), QString()},
+                    {QStringLiteral("size"), QString()},
+                    {QStringLiteral("desc"), QStringLiteral("Community voice from %1").arg(repoId)},
+                    {QStringLiteral("url"), baseUrl + fname},
+                    {QStringLiteral("urlJson"), baseUrl + fname + QStringLiteral(".json")},
+                    {QStringLiteral("downloaded"), downloaded},
+                    {QStringLiteral("active"), active},
+                });
+                added = true;
+            }
+        }
+
+        if (added) emit availableTtsVoicesChanged();
+    });
 }
 
 // ─────────────────────────────────────────────
@@ -1257,7 +1264,7 @@ void JarvisSettings::downloadTtsVoice(const QString &voiceId)
                 jsonReply->deleteLater();
                 m_downloadStatus = QStringLiteral("Voice downloaded!");
                 setActiveTtsVoice(voiceId);
-                populateVoiceList();
+                fetchPiperVoices(m_voiceLangFilter);
                 m_downloading = false;
                 m_downloadReply = nullptr;
                 emit downloadingChanged();
@@ -1291,7 +1298,7 @@ void JarvisSettings::setActiveTtsVoice(const QString &voiceId)
         m_piperModelPath = onnxPath;
         m_currentVoiceName = voiceId;
         saveSettings();
-        populateVoiceList();
+        fetchPiperVoices(m_voiceLangFilter);
         emit currentVoiceNameChanged();
         emit voiceActivated(voiceId, onnxPath);
     }

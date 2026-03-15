@@ -242,7 +242,7 @@ public:
     Q_INVOKABLE void cancelDownload();
     Q_INVOKABLE void openUrl(const QString &url);
     Q_INVOKABLE void testVoice(const QString &voiceId);
-    Q_INVOKABLE void fetchMoreVoices();
+    Q_INVOKABLE void searchVoices(const QString &langFilter, const QString &qualityFilter = {});
 
     // OAuth invokables
     Q_INVOKABLE void oauthLogin(const QString &provider);
