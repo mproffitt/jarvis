@@ -84,14 +84,20 @@ void JarvisBackend::connectModuleSignals()
     connect(m_audio, &JarvisAudio::ttsInterrupted, this, [this]() {
         qDebug() << "[JARVIS] TTS interrupted by wake word";
         m_tts->stop();
-        // Abort any in-flight LLM request too
+        // Abort any in-flight LLM request
         if (m_streamReply) {
             m_streamReply->abort();
             m_streamReply->deleteLater();
             m_streamReply = nullptr;
-            m_processing = false;
-            emit processingChanged();
         }
+        // Fully reset processing state so new commands can be sent
+        m_processing = false;
+        m_streamBuffer.clear();
+        m_fullStreamedResponse.clear();
+        m_spokenSoFar.clear();
+        m_toolCallLoopCount = 0;
+        emit processingChanged();
+        setStatus("Interrupted. Listening...");
     });
     connect(m_audio, &JarvisAudio::wakeWordMatch, this, [this](const QString &word) {
         // Provider name wake words

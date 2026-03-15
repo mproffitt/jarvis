@@ -194,7 +194,8 @@ void JarvisTts::processNextSentence()
             m_sentenceProc->deleteLater();
             m_sentenceProc = nullptr;
         }
-        processNextSentence();
+        // Don't continue if stop() was called
+        if (m_playingBack) processNextSentence();
     });
 
     m_sentenceProc->start(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), cmd});
