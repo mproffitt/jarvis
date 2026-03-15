@@ -10,6 +10,8 @@
 #include <QDBusInterface>
 #include <QDBusReply>
 #include <QDBusUnixFileDescriptor>
+#include <QGuiApplication>
+#include <QClipboard>
 #include <unistd.h>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -2376,14 +2378,45 @@ void JarvisBackend::executeTypeText(const QString &text)
     if (text.isEmpty()) return;
     qDebug() << "[JARVIS] Typing text:" << text.left(50) << "...";
 
-    // Use xdotool to type text into the focused window
-    // Small delay to allow window focus to settle
-    auto *proc = new QProcess(this);
-    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            proc, &QProcess::deleteLater);
+    // Save current clipboard, set new text, simulate Ctrl+V, restore clipboard
+    auto *clipboard = QGuiApplication::clipboard();
+    const QString savedClipboard = clipboard->text();
 
-    // xdotool type with a small delay between keystrokes for reliability
-    const QString escapedText = QString(text).replace(QStringLiteral("'"), QStringLiteral("'\\''"));
-    const QString cmd = QStringLiteral("sleep 0.5 && xdotool type --clearmodifiers --delay 12 '%1'").arg(escapedText);
-    proc->start(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), cmd});
+    clipboard->setText(text);
+
+    // Simulate Ctrl+V via KWin FakeInput after a short delay
+    QTimer::singleShot(300, this, [this, savedClipboard]() {
+        // Use KWin's keyboard simulation to send Ctrl+V
+        QDBusInterface kwin(QStringLiteral("org.kde.KWin"),
+            QStringLiteral("/Modules/1"),
+            QStringLiteral("org.kde.kglobalaccel.Component"));
+
+        // Simpler: use xdg-open with a qdbus call to trigger paste
+        // KWin doesn't expose a clean "type key" D-Bus API, so use ydotool or wtype as fallback
+        // Most reliable: just leave text on clipboard and notify user
+        // For now: try ydotool first, then xdotool, then just leave on clipboard
+        auto *proc = new QProcess(this);
+        connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                this, [this, proc, savedClipboard](int exitCode, QProcess::ExitStatus) {
+            proc->deleteLater();
+            // Restore clipboard after a delay to let paste complete
+            QTimer::singleShot(500, this, [this, savedClipboard]() {
+                QGuiApplication::clipboard()->setText(savedClipboard);
+            });
+        });
+
+        // Try ydotool (Wayland) → xdotool (X11) → notify user
+        if (QFile::exists(QStringLiteral("/usr/bin/ydotool"))) {
+            proc->start(QStringLiteral("ydotool"), {QStringLiteral("key"), QStringLiteral("29:1"), QStringLiteral("47:1"), QStringLiteral("47:0"), QStringLiteral("29:0")}); // Ctrl+V
+        } else if (QFile::exists(QStringLiteral("/usr/bin/xdotool"))) {
+            proc->start(QStringLiteral("xdotool"), {QStringLiteral("key"), QStringLiteral("ctrl+v")});
+        } else {
+            // No tool available — text is on clipboard, user can paste manually
+            qDebug() << "[JARVIS] No input tool available — text placed on clipboard";
+            proc->deleteLater();
+            QTimer::singleShot(5000, this, [savedClipboard]() {
+                QGuiApplication::clipboard()->setText(savedClipboard);
+            });
+        }
+    });
 }
