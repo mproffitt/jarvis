@@ -78,4 +78,14 @@ ecm_install_icons(
     THEME hicolor
 )
 
+# libpiper for native TTS synthesis (optional)
+find_library(PIPER_LIB NAMES piper PATHS /usr/local/lib64 /usr/local/lib)
+find_path(PIPER_INC piper.h PATHS /usr/local/include)
+if(PIPER_LIB AND PIPER_INC)
+    set(PIPER_FOUND TRUE)
+    message(STATUS "Found libpiper: ${PIPER_LIB}")
+else()
+    message(STATUS "libpiper not found — falling back to piper binary")
+endif()
+
 add_subdirectory(src/plugin)

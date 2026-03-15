@@ -11,6 +11,12 @@
 #include <QTimer>
 #include <QDebug>
 
+#ifdef HAVE_LIBPIPER
+#include <QtConcurrent>
+#include <cmath>
+#include <cstring>
+#endif
+
 JarvisTts::JarvisTts(JarvisSettings *settings, QObject *parent)
     : QObject(parent)
     , m_settings(settings)
@@ -21,10 +27,91 @@ JarvisTts::JarvisTts(JarvisSettings *settings, QObject *parent)
 JarvisTts::~JarvisTts()
 {
     stop();
+#ifdef HAVE_LIBPIPER
+    stopLibPiper();
+#endif
 }
+
+#ifdef HAVE_LIBPIPER
+void JarvisTts::initLibPiper()
+{
+    const QString modelPath = m_settings->piperModelPath();
+    if (modelPath.isEmpty()) {
+        qWarning() << "[JARVIS] libpiper: no model path configured";
+        return;
+    }
+
+    const QByteArray modelPathUtf8 = modelPath.toUtf8();
+    const char *espeakDataPath = "/usr/local/share/espeak-ng-data";
+
+    m_piperSynth = piper_create(modelPathUtf8.constData(), nullptr, espeakDataPath);
+    if (!m_piperSynth) {
+        qWarning() << "[JARVIS] libpiper: piper_create() failed for" << modelPath;
+        return;
+    }
+
+    m_useLibPiper = true;
+    qDebug() << "[JARVIS] Using libpiper for native TTS, model:" << modelPath;
+}
+
+void JarvisTts::stopLibPiper()
+{
+    if (m_playProc) {
+        m_playProc->closeWriteChannel();
+        m_playProc->waitForFinished(1000);
+        m_playProc->kill();
+        m_playProc->deleteLater();
+        m_playProc = nullptr;
+    }
+
+    if (m_piperSynth) {
+        piper_free(m_piperSynth);
+        m_piperSynth = nullptr;
+    }
+    m_useLibPiper = false;
+}
+
+void JarvisTts::ensurePwCat()
+{
+    if (m_playProc && m_playProc->state() == QProcess::Running) {
+        return;
+    }
+
+    if (m_playProc) {
+        m_playProc->deleteLater();
+        m_playProc = nullptr;
+    }
+
+    m_playProc = new QProcess(this);
+    m_playProc->setProcessChannelMode(QProcess::ForwardedErrorChannel);
+    m_playProc->start(QStringLiteral("pw-cat"), {
+        QStringLiteral("--playback"),
+        QStringLiteral("--raw"),
+        QStringLiteral("--rate=22050"),
+        QStringLiteral("--channels=1"),
+        QStringLiteral("--format=s16"),
+        QStringLiteral("-")
+    });
+
+    if (!m_playProc->waitForStarted(3000)) {
+        qWarning() << "[JARVIS] libpiper: failed to start pw-cat";
+        m_playProc->deleteLater();
+        m_playProc = nullptr;
+    }
+}
+#endif
 
 void JarvisTts::initTts()
 {
+#ifdef HAVE_LIBPIPER
+    // Try libpiper first
+    initLibPiper();
+    if (m_useLibPiper) {
+        return;
+    }
+    qDebug() << "[JARVIS] libpiper init failed, trying piper binary...";
+#endif
+
     const QStringList piperPaths = {
         QDir::homePath() + QStringLiteral("/.local/bin/piper"),
         QStringLiteral("/usr/lib/piper-tts/bin/piper"),
@@ -106,6 +193,22 @@ void JarvisTts::speak(const QString &text)
     cleanText.remove(QRegularExpression(QStringLiteral("[*_`#]")));
     cleanText.replace(QStringLiteral("\n"), QStringLiteral(". "));
 
+#ifdef HAVE_LIBPIPER
+    if (m_useLibPiper) {
+        const QStringList sentences = splitIntoSentences(cleanText);
+        {
+            QMutexLocker lock(&m_queueMutex);
+            for (const auto &s : sentences) {
+                m_sentenceQueue.enqueue(s);
+            }
+        }
+        if (!m_playingBack) {
+            processNextSentence();
+        }
+        return;
+    }
+#endif
+
     if (m_usePiper) {
         const QStringList sentences = splitIntoSentences(cleanText);
         {
@@ -130,6 +233,19 @@ void JarvisTts::speakSentence(const QString &sentence)
     QString cleanText = sentence;
     cleanText.remove(QRegularExpression(QStringLiteral("[*_`#]")));
     cleanText.replace(QStringLiteral("\n"), QStringLiteral(". "));
+
+#ifdef HAVE_LIBPIPER
+    if (m_useLibPiper) {
+        {
+            QMutexLocker lock(&m_queueMutex);
+            m_sentenceQueue.enqueue(cleanText);
+        }
+        if (!m_playingBack) {
+            processNextSentence();
+        }
+        return;
+    }
+#endif
 
     if (m_usePiper) {
         {
@@ -164,6 +280,70 @@ void JarvisTts::processNextSentence()
         emit speakingChanged();
     }
 
+#ifdef HAVE_LIBPIPER
+    if (m_useLibPiper) {
+        const double lengthScale = 1.0 - (m_settings->ttsRate() * 0.5);
+        const QByteArray textUtf8 = sentence.toUtf8();
+
+        // Capture what we need for the background thread
+        auto *synth = m_piperSynth;
+
+        (void)QtConcurrent::run([this, synth, textUtf8, lengthScale]() {
+            piper_synthesize_options opts = piper_default_synthesize_options(synth);
+            opts.length_scale = static_cast<float>(lengthScale);
+
+            int rc = piper_synthesize_start(synth, textUtf8.constData(), &opts);
+            if (rc != PIPER_OK) {
+                qWarning() << "[JARVIS] libpiper: piper_synthesize_start failed:" << rc;
+                QMetaObject::invokeMethod(this, [this]() {
+                    if (m_playingBack) processNextSentence();
+                }, Qt::QueuedConnection);
+                return;
+            }
+
+            // Ensure pw-cat is running (must be on main thread for QProcess)
+            QMetaObject::invokeMethod(this, &JarvisTts::ensurePwCat, Qt::BlockingQueuedConnection);
+
+            piper_audio_chunk chunk{};
+            while (true) {
+                rc = piper_synthesize_next(synth, &chunk);
+                if (rc == PIPER_DONE) {
+                    break;
+                }
+                if (rc != PIPER_OK) {
+                    qWarning() << "[JARVIS] libpiper: piper_synthesize_next failed:" << rc;
+                    break;
+                }
+
+                // Convert float [-1,1] to int16
+                const size_t numSamples = chunk.num_samples;
+                QByteArray pcmData(static_cast<int>(numSamples * sizeof(int16_t)), Qt::Uninitialized);
+                auto *out = reinterpret_cast<int16_t *>(pcmData.data());
+                for (size_t i = 0; i < numSamples; ++i) {
+                    float s = chunk.samples[i];
+                    if (s > 1.0f) s = 1.0f;
+                    if (s < -1.0f) s = -1.0f;
+                    out[i] = static_cast<int16_t>(s * 32767.0f);
+                }
+
+                // Write to pw-cat (access m_playProc on main thread)
+                QMetaObject::invokeMethod(this, [this, pcmData]() {
+                    if (m_playProc && m_playProc->state() == QProcess::Running) {
+                        m_playProc->write(pcmData);
+                    }
+                }, Qt::BlockingQueuedConnection);
+            }
+
+            // Schedule next sentence on main thread
+            QMetaObject::invokeMethod(this, [this]() {
+                if (m_playingBack) processNextSentence();
+            }, Qt::QueuedConnection);
+        });
+        return;
+    }
+#endif
+
+    // Fallback: shell pipeline with piper binary
     if (m_piperBin.isEmpty()) {
         qWarning() << "[JARVIS] Piper binary not found";
         m_playingBack = false;
@@ -215,6 +395,18 @@ void JarvisTts::stop()
         m_sentenceProc->deleteLater();
         m_sentenceProc = nullptr;
     }
+
+#ifdef HAVE_LIBPIPER
+    // Kill persistent pw-cat used by libpiper
+    if (m_playProc) {
+        m_playProc->closeWriteChannel();
+        m_playProc->waitForFinished(500);
+        m_playProc->kill();
+        m_playProc->deleteLater();
+        m_playProc = nullptr;
+    }
+#endif
+
     if (m_tts) {
         m_tts->stop();
     }
@@ -241,7 +433,7 @@ bool JarvisTts::isMuted() const
 void JarvisTts::onTtsRateChanged()
 {
     if (!m_usePiper && m_tts) m_tts->setRate(m_settings->ttsRate());
-    // Piper uses --length-scale at speak time — no action needed
+    // Piper / libpiper uses length_scale at speak time — no action needed
 }
 
 void JarvisTts::onTtsPitchChanged()
@@ -259,6 +451,24 @@ void JarvisTts::onTtsVolumeChanged()
 void JarvisTts::onVoiceActivated(const QString &voiceId, const QString &onnxPath)
 {
     Q_UNUSED(voiceId)
+
+#ifdef HAVE_LIBPIPER
+    if (m_useLibPiper) {
+        // Reload model with new path
+        stop();
+        if (m_piperSynth) {
+            piper_free(m_piperSynth);
+            m_piperSynth = nullptr;
+        }
+        m_useLibPiper = false;
+
+        // Re-init with the new model (settings already updated)
+        Q_UNUSED(onnxPath)
+        initLibPiper();
+        return;
+    }
+#endif
+
     Q_UNUSED(onnxPath)
-    // Piper model path is read from settings at speak time
+    // Piper binary model path is read from settings at speak time
 }

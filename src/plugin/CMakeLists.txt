@@ -38,6 +38,12 @@ target_link_libraries(jarvis_plugin
     ${RNNOISE_LIBRARIES}
 )
 
+if(PIPER_FOUND)
+    target_include_directories(jarvis_plugin PRIVATE ${PIPER_INC})
+    target_link_libraries(jarvis_plugin ${PIPER_LIB})
+    target_compile_definitions(jarvis_plugin PRIVATE HAVE_LIBPIPER)
+endif()
+
 target_compile_features(jarvis_plugin PUBLIC cxx_std_23)
 
 install(TARGETS jarvis_plugin DESTINATION ${KDE_INSTALL_QMLDIR}/org/kde/plasma/jarvis)

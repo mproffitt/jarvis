@@ -9,6 +9,10 @@
 #include <QMutex>
 #include <atomic>
 
+#ifdef HAVE_LIBPIPER
+#include <piper.h>
+#endif
+
 class JarvisSettings;
 
 class JarvisTts : public QObject
@@ -46,7 +50,7 @@ private:
     JarvisSettings *m_settings{nullptr};
     QTextToSpeech *m_tts{nullptr};
 
-    // Per-sentence piper process
+    // Shell-pipeline piper process (fallback)
     QProcess *m_sentenceProc{nullptr};
     QString m_piperBin;
     bool m_usePiper{false};
@@ -56,4 +60,15 @@ private:
     QQueue<QString> m_sentenceQueue;
     QMutex m_queueMutex;
     bool m_playingBack{false};
+
+#ifdef HAVE_LIBPIPER
+    // Native libpiper support
+    struct piper_synthesizer *m_piperSynth{nullptr};
+    QProcess *m_playProc{nullptr};
+    bool m_useLibPiper{false};
+
+    void initLibPiper();
+    void stopLibPiper();
+    void ensurePwCat();
+#endif
 };
