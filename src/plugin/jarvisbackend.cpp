@@ -831,6 +831,7 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
 
                 const QString uri = QStringLiteral("spotify:search:%1").arg(searchTerm);
                 QProcess::startDetached(QStringLiteral("xdg-open"), {uri});
+                m_tts->stop();
                 speak(QStringLiteral("Playing %1").arg(searchTerm));
                 setStatus(QStringLiteral("Spotify: %1").arg(searchTerm));
             });
