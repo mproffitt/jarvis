@@ -7,6 +7,7 @@
 #include "rag/jarvisrag.h"
 #include "mcp/jarvismcp.h"
 
+#include <QTime>
 #include <QDBusInterface>
 #include <QDBusReply>
 #include <QDBusUnixFileDescriptor>
@@ -172,6 +173,9 @@ void JarvisBackend::connectModuleSignals()
         emit micBusyChanged();
         if (busy) setStatus("Mic in use by another app — wake word paused.");
         else setStatus("Mic free — wake word active.");
+    });
+    connect(m_audio, &JarvisAudio::whisperHeard, this, [this](const QString &source, const QString &text) {
+        appendWhisperLog(source, text);
     });
     connect(m_audio, &JarvisAudio::modelDownloadStatus, this, [this](const QString &status) {
         setStatus(status);
@@ -2113,6 +2117,16 @@ void JarvisBackend::setStatus(const QString &status)
         m_statusText = status;
         emit statusTextChanged();
     }
+}
+
+void JarvisBackend::appendWhisperLog(const QString &source, const QString &text)
+{
+    const QString timestamp = QTime::currentTime().toString(QStringLiteral("HH:mm:ss"));
+    m_whisperLog.prepend(QStringLiteral("[%1] %2: %3").arg(timestamp, source, text));
+    // Keep last 50 entries
+    while (m_whisperLog.size() > 50)
+        m_whisperLog.removeLast();
+    emit whisperLogChanged();
 }
 
 void JarvisBackend::addToChatHistory(const QString &role, const QString &message)

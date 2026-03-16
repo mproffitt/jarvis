@@ -54,6 +54,7 @@ signals:
     void voiceCommandTranscribed(const QString &text);
     void micBusyChanged(bool busy);
     void modelDownloadStatus(const QString &status);
+    void whisperHeard(const QString &source, const QString &text);
 
 private slots:
     void processAudioBuffer();
@@ -106,6 +107,7 @@ private:
     std::atomic<bool> m_ttsSpeaking{false};
     double m_audioLevel{0.0};
     QString m_lastTranscription;
+    QString m_lastWakeTranscript;
 
     MicMonitor *m_micMonitor{nullptr};
     QNetworkAccessManager *m_downloadManager{nullptr};

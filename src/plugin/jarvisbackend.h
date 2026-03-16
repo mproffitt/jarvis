@@ -46,6 +46,7 @@ class JarvisBackend : public QObject
     // Voice command mode
     Q_PROPERTY(bool voiceCommandMode READ isVoiceCommandMode NOTIFY voiceCommandModeChanged)
     Q_PROPERTY(QString lastTranscription READ lastTranscription NOTIFY lastTranscriptionChanged)
+    Q_PROPERTY(QStringList whisperLog READ whisperLog NOTIFY whisperLogChanged)
 
     // System monitoring
     Q_PROPERTY(double cpuUsage READ cpuUsage NOTIFY systemStatsChanged)
@@ -127,6 +128,7 @@ public:
     // Voice command
     [[nodiscard]] bool isVoiceCommandMode() const;
     [[nodiscard]] QString lastTranscription() const;
+    [[nodiscard]] QStringList whisperLog() const { return m_whisperLog; }
 
     // System monitoring (delegated)
     [[nodiscard]] double cpuUsage() const;
@@ -273,6 +275,7 @@ signals:
     void errorOccurred(const QString &error);
     void voiceCommandModeChanged();
     void lastTranscriptionChanged();
+    void whisperLogChanged();
     void systemStatsChanged();
     void currentTimeChanged();
     void remindersChanged();
@@ -319,6 +322,7 @@ private slots:
 private:
     void sendToLlm(const QString &userMessage);
     void setStatus(const QString &status);
+    void appendWhisperLog(const QString &source, const QString &text);
     void addToChatHistory(const QString &role, const QString &message);
     QJsonArray buildConversationContext() const;
     QString buildSystemPrompt(const QString &ragContext = {}) const;
@@ -424,6 +428,7 @@ private:
     // Continuous conversation
     bool m_continuousMode{false};
     bool m_conversationActive{false};
+    QStringList m_whisperLog;
     int m_emptyTranscriptionCount{0};
     QTimer *m_conversationTimeout{nullptr};
 

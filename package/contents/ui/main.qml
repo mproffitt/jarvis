@@ -772,6 +772,35 @@ PlasmoidItem {
                                     }
                                 }
                             }
+
+                            // Whisper log
+                            Rectangle {
+                                Layout.fillWidth: true; Layout.preferredHeight: 120
+                                color: bgDark; radius: 6; border.color: borderDim; border.width: 1; clip: true
+                                ColumnLayout {
+                                    anchors { fill: parent; margins: 10 }
+                                    spacing: 4
+                                    Text { text: "WHISPER LOG"; color: cyanDim
+                                        font { pixelSize: 9; bold: true; family: monoFont; letterSpacing: 1 } }
+                                    Rectangle { Layout.fillWidth: true; height: 1; color: borderDim }
+
+                                    ListView {
+                                        id: whisperLogView
+                                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 2
+                                        model: JarvisBackend.whisperLog
+                                        delegate: Text {
+                                            width: whisperLogView.width
+                                            text: modelData
+                                            color: modelData.indexOf("wake") >= 0 ? "#607890" : cyanPrimary
+                                            font { pixelSize: 9; family: monoFont }
+                                            wrapMode: Text.Wrap
+                                        }
+                                        Text { anchors.centerIn: parent; visible: parent.count === 0
+                                            text: "Waiting for audio..."; color: "#1a3050"
+                                            font { pixelSize: 10; italic: true; family: uiFont } }
+                                    }
+                                }
+                            }
                         }
                     }
 

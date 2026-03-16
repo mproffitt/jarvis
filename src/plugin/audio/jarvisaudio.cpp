@@ -241,6 +241,13 @@ void JarvisAudio::processAudioBuffer()
         const QString matched = detectWakeWord(bufferCopy);
         m_whisperBusy = false;
 
+        // Log what whisper heard (for diagnostics)
+        const QString heard = m_lastWakeTranscript;
+        QMetaObject::invokeMethod(this, [this, heard]() {
+            emit whisperHeard(QStringLiteral("wake"),
+                heard.isEmpty() ? QStringLiteral("(silence)") : heard);
+        }, Qt::QueuedConnection);
+
         if (!matched.isEmpty()) {
             const bool wasTtsSpeaking = m_ttsSpeaking.load();
             QMetaObject::invokeMethod(this, [this, matched, wasTtsSpeaking]() {
@@ -286,7 +293,19 @@ QString JarvisAudio::detectWakeWord(const QByteArray &audioData)
         if (!text) continue;
 
         QString transcript = QString::fromUtf8(text).toLower().trimmed();
-        qDebug() << "[JARVIS] Whisper heard:" << transcript;
+
+        // Use whisper's own no-speech probability to filter hallucinations
+        const float noSpeechProb = whisper_full_get_segment_no_speech_prob(m_whisperCtx, i);
+        if (noSpeechProb > 0.6f) {
+            m_lastWakeTranscript = QStringLiteral("(no_speech %.0f%%: %1)")
+                .arg(static_cast<double>(noSpeechProb * 100.0f), 0, 'f', 0).arg(transcript);
+            qDebug() << "[JARVIS] Whisper hallucination (no_speech_prob:" << noSpeechProb << "):" << transcript;
+            continue;
+        }
+
+        m_lastWakeTranscript = QStringLiteral("%1 [%.0f%%]")
+            .arg(transcript).arg(static_cast<double>((1.0f - noSpeechProb) * 100.0f), 0, 'f', 0);
+        qDebug() << "[JARVIS] Whisper heard:" << transcript << "no_speech_prob:" << noSpeechProb;
 
         // Check primary wake word with fuzzy matching
         const QString wakeWord = m_settings->wakeWord().toLower();
@@ -384,10 +403,15 @@ QString JarvisAudio::transcribeAudio(const QByteArray &audioData)
     QString result;
     const int nSegments = whisper_full_n_segments(m_whisperCtx);
     for (int i = 0; i < nSegments; ++i) {
+        const float noSpeechProb = whisper_full_get_segment_no_speech_prob(m_whisperCtx, i);
+        if (noSpeechProb > 0.6f) {
+            qDebug() << "[JARVIS] Transcription: skipping hallucinated segment (no_speech:" << noSpeechProb << ")";
+            continue;
+        }
         const char *text = whisper_full_get_segment_text(m_whisperCtx, i);
         if (text) {
+            if (!result.isEmpty()) result += QStringLiteral(" ");
             result += QString::fromUtf8(text).trimmed();
-            if (i < nSegments - 1) result += QStringLiteral(" ");
         }
     }
 
@@ -719,6 +743,7 @@ void JarvisAudio::processVoiceCommand()
         QMetaObject::invokeMethod(this, [this, text]() {
             m_lastTranscription = text;
             emit lastTranscriptionChanged();
+            emit whisperHeard(QStringLiteral("cmd"), text.isEmpty() ? QStringLiteral("(empty)") : text);
             emit voiceCommandTranscribed(text);
         }, Qt::QueuedConnection);
     });
