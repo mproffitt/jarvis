@@ -11,6 +11,7 @@ PlasmoidItem {
     preferredRepresentation: compactRepresentation
     fullRepresentation: fullRep
     compactRepresentation: compactRep
+    Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
 
     readonly property color cyanPrimary:   "#4dc9f6"
     readonly property color cyanDim:       "#1a5a7a"
