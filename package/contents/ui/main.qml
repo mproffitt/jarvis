@@ -77,15 +77,90 @@ PlasmoidItem {
                         ctx.lineWidth = 1;
                         ctx.stroke();
                     }
-                    // Core glow
+                    // Core glow — changes colour based on state
+                    var coreColor = JarvisBackend.voiceCommandMode
+                        ? Qt.rgba(0.0, 1.0, 0.53, 0.95)   // green when recording
+                        : JarvisBackend.speaking
+                        ? Qt.rgba(0.94, 0.63, 0.19, 0.95)  // orange when speaking
+                        : JarvisBackend.connected
+                        ? Qt.rgba(0.4, 0.95, 1.0, 0.95)    // cyan when idle
+                        : Qt.rgba(1.0, 0.3, 0.2, 0.9);     // red when disconnected
                     var grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 0.35);
-                    grd.addColorStop(0, JarvisBackend.connected ?
-                        Qt.rgba(0.4, 0.95, 1.0, 0.95) : Qt.rgba(1.0, 0.3, 0.2, 0.9));
+                    grd.addColorStop(0, coreColor);
                     grd.addColorStop(1, Qt.rgba(0.1, 0.4, 0.6, 0.0));
                     ctx.beginPath();
                     ctx.arc(cx, cy, r * 0.35, 0, 2 * Math.PI);
                     ctx.fillStyle = grd;
                     ctx.fill();
+                }
+
+                // Repaint when state changes
+                Connections {
+                    target: JarvisBackend
+                    function onVoiceCommandModeChanged() { reactorIcon.requestPaint() }
+                    function onSpeakingChanged() { reactorIcon.requestPaint() }
+                    function onConnectedChanged() { reactorIcon.requestPaint() }
+                }
+            }
+
+            // Audio waveform overlay — visible when listening
+            Canvas {
+                id: compactWave
+                anchors.centerIn: parent
+                width: reactorIcon.width
+                height: reactorIcon.width
+                visible: JarvisBackend.listening || JarvisBackend.voiceCommandMode || JarvisBackend.speaking
+                opacity: Math.min(JarvisBackend.audioLevel * 8, 1.0)
+                Behavior on opacity { NumberAnimation { duration: 200 } }
+
+                property real wavePhase: 0.0
+                NumberAnimation on wavePhase {
+                    from: 0; to: 2 * Math.PI; duration: 1500
+                    loops: Animation.Infinite
+                }
+                onWavePhaseChanged: requestPaint()
+
+                onPaint: {
+                    var ctx = getContext("2d");
+                    ctx.reset();
+                    var cx = width / 2, cy = height / 2, r = width / 2 - 1;
+
+                    // Clip to circle
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, r * 0.55, 0, 2 * Math.PI);
+                    ctx.clip();
+
+                    var level = Math.max(JarvisBackend.audioLevel * 5, 0.05);
+                    var amp = JarvisBackend.voiceCommandMode ? 0.7 :
+                              JarvisBackend.speaking ? 0.4 : 0.25;
+                    var color = JarvisBackend.voiceCommandMode ? "#00ff88" :
+                                JarvisBackend.speaking ? "#f0a030" : "#4dc9f6";
+
+                    // Primary wave
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 1;
+                    ctx.globalAlpha = 0.7;
+                    ctx.beginPath();
+                    for (var x = 0; x < width; x += 2) {
+                        var t = x / width * 4 * Math.PI;
+                        var y = cy + Math.sin(t + wavePhase) * r * 0.4 * amp * level
+                                   + Math.sin(t * 2.5 - wavePhase * 1.3) * r * 0.15 * amp * level;
+                        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                    }
+                    ctx.stroke();
+
+                    // Ghost wave
+                    ctx.globalAlpha = 0.2;
+                    ctx.beginPath();
+                    for (var x2 = 0; x2 < width; x2 += 2) {
+                        var t2 = x2 / width * 4 * Math.PI;
+                        var y2 = cy + Math.sin(t2 + wavePhase + 1) * r * 0.3 * amp * level;
+                        if (x2 === 0) ctx.moveTo(x2, y2); else ctx.lineTo(x2, y2);
+                    }
+                    ctx.stroke();
+
+                    ctx.restore();
                 }
             }
         }
