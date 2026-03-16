@@ -1,4 +1,5 @@
 #include "jarvisTts.h"
+#include "../audio/pwplayback.h"
 #include "../settings/jarvissettings.h"
 
 #include <QDir>
@@ -56,69 +57,20 @@ void JarvisTts::initLibPiper()
 
 void JarvisTts::stopLibPiper()
 {
-    if (m_playProc) {
-        m_playProc->closeWriteChannel();
-        m_playProc->waitForFinished(1000);
-        m_playProc->kill();
-        m_playProc->deleteLater();
-        m_playProc = nullptr;
-    }
-
     if (m_piperSynth) {
         piper_free(m_piperSynth);
         m_piperSynth = nullptr;
     }
     m_useLibPiper = false;
 }
-
-void JarvisTts::ensurePwCat()
-{
-    if (m_playProc && m_playProc->state() == QProcess::Running) {
-        return;
-    }
-
-    if (m_playProc) {
-        m_playProc->deleteLater();
-        m_playProc = nullptr;
-    }
-
-    // If a previous pw-cat is draining, reuse it instead of creating a new one
-    if (m_draining) {
-        // The draining process still has its stdin closed — can't reuse it.
-        // Kill it and create fresh.
-        m_draining->kill();
-        m_draining->deleteLater();
-        m_draining = nullptr;
-    }
-
-    m_playProc = new QProcess(this);
-    m_playProc->setProcessChannelMode(QProcess::ForwardedErrorChannel);
-    m_playProc->start(QStringLiteral("pw-cat"), {
-        QStringLiteral("--playback"),
-        QStringLiteral("--raw"),
-        QStringLiteral("--rate=22050"),
-        QStringLiteral("--channels=1"),
-        QStringLiteral("--properties=media.name=J.A.R.V.I.S.,node.name=J.A.R.V.I.S."),
-        QStringLiteral("--format=s16"),
-        QStringLiteral("-")
-    });
-
-    if (!m_playProc->waitForStarted(3000)) {
-        qWarning() << "[JARVIS] libpiper: failed to start pw-cat";
-        m_playProc->deleteLater();
-        m_playProc = nullptr;
-    } else {
-        // Write ~50ms of silence to let pw-cat's PipeWire stream settle
-        // before real audio, preventing the first word from being cut off.
-        const int silenceSamples = 22050 / 20; // 50ms at 22050 Hz
-        QByteArray silence(silenceSamples * 2, '\0');
-        m_playProc->write(silence);
-    }
-}
 #endif
 
 void JarvisTts::initTts()
 {
+    // Create PipeWire playback stream (shared by libpiper and piper binary)
+    m_playback = new PwPlayback(this);
+    m_playback->start();
+
 #ifdef HAVE_LIBPIPER
     // Try libpiper first
     initLibPiper();
@@ -283,26 +235,16 @@ void JarvisTts::processNextSentence()
         QMutexLocker lock(&m_queueMutex);
         if (m_sentenceQueue.isEmpty()) {
             m_playingBack = false;
-#ifdef HAVE_LIBPIPER
-            // Keep pw-cat alive for future sentences — don't close/drain it.
-            // It will be killed in stop() or when a new batch starts after
-            // the mic reopens. Defer speakingChanged slightly to let pw-cat
-            // flush its buffer.
-            if (m_playProc) {
-                QTimer::singleShot(300, this, [this]() {
-                    if (!m_playingBack) {
-                        m_speaking = false;
-                        emit speakingChanged();
-                    }
-                });
-            } else {
-                m_speaking = false;
-                emit speakingChanged();
-            }
-#else
-            m_speaking = false;
-            emit speakingChanged();
-#endif
+            // Signal drain so PwPlayback can notify when buffer is empty
+            if (m_playback)
+                m_playback->drain();
+            // Defer speakingChanged to let the playback buffer flush
+            QTimer::singleShot(300, this, [this]() {
+                if (!m_playingBack) {
+                    m_speaking = false;
+                    emit speakingChanged();
+                }
+            });
             return;
         }
         sentence = m_sentenceQueue.dequeue();
@@ -335,9 +277,6 @@ void JarvisTts::processNextSentence()
                 return;
             }
 
-            // Ensure pw-cat is running (must be on main thread for QProcess)
-            QMetaObject::invokeMethod(this, &JarvisTts::ensurePwCat, Qt::BlockingQueuedConnection);
-
             piper_audio_chunk chunk{};
             while (true) {
                 rc = piper_synthesize_next(synth, &chunk);
@@ -360,12 +299,8 @@ void JarvisTts::processNextSentence()
                     out[i] = static_cast<int16_t>(s * 32767.0f);
                 }
 
-                // Write to pw-cat (access m_playProc on main thread)
-                QMetaObject::invokeMethod(this, [this, pcmData]() {
-                    if (m_playProc && m_playProc->state() == QProcess::Running) {
-                        m_playProc->write(pcmData);
-                    }
-                }, Qt::BlockingQueuedConnection);
+                // Write directly to PipeWire playback (thread-safe)
+                m_playback->write(pcmData);
             }
 
             // Schedule next sentence on main thread
@@ -429,23 +364,6 @@ void JarvisTts::stop()
         m_sentenceProc->deleteLater();
         m_sentenceProc = nullptr;
     }
-
-#ifdef HAVE_LIBPIPER
-    // Kill persistent pw-cat used by libpiper
-    if (m_playProc) {
-        m_playProc->closeWriteChannel();
-        m_playProc->waitForFinished(500);
-        m_playProc->kill();
-        m_playProc->deleteLater();
-        m_playProc = nullptr;
-    }
-    // Kill pw-cat that was draining (finishing playback)
-    if (m_draining) {
-        m_draining->kill();
-        m_draining->deleteLater();
-        m_draining = nullptr;
-    }
-#endif
 
     if (m_tts) {
         m_tts->stop();

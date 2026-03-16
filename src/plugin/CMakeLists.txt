@@ -6,6 +6,7 @@ set(jarvis_plugin_SRCS
     tts/jarvisTts.cpp
     audio/jarvisaudio.cpp
     audio/pwcapture.cpp
+    audio/pwplayback.cpp
     audio/micmonitor.cpp
     system/jarvissystem.cpp
     commands/jarviscommands.cpp

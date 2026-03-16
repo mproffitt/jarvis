@@ -14,6 +14,7 @@
 #endif
 
 class JarvisSettings;
+class PwPlayback;
 
 class JarvisTts : public QObject
 {
@@ -61,15 +62,15 @@ private:
     QMutex m_queueMutex;
     bool m_playingBack{false};
 
+    // Native PipeWire playback (replaces pw-cat)
+    PwPlayback *m_playback{nullptr};
+
 #ifdef HAVE_LIBPIPER
     // Native libpiper support
     struct piper_synthesizer *m_piperSynth{nullptr};
-    QProcess *m_playProc{nullptr};
-    QProcess *m_draining{nullptr};  // pw-cat finishing playback of last chunk
     bool m_useLibPiper{false};
 
     void initLibPiper();
     void stopLibPiper();
-    void ensurePwCat();
 #endif
 };
