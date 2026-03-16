@@ -1208,21 +1208,7 @@ QString JarvisBackend::buildSystemPrompt() const
     QString systemPrompt = m_settings->personalityPrompt().isEmpty()
         ? QString::fromUtf8(JARVIS_SYSTEM_PROMPT) : m_settings->personalityPrompt();
 
-    if (!m_pendingRagContext.isEmpty()) {
-        // When file search results are available, remove ACTION instructions
-        // to prevent the model from trying to open/cat files itself
-        static const QRegularExpression actionSection(
-            QStringLiteral("SYSTEM INTERACTION CAPABILITIES:[\\s\\S]*?(?=\\n\\n[A-Z]|$)"));
-        systemPrompt.remove(actionSection);
 
-        systemPrompt += QStringLiteral(
-            "\n\nIMPORTANT: The following file contents were retrieved from the user's computer. "
-            "Use ONLY this information to answer. Do NOT use any ACTION blocks. "
-            "Do NOT try to open, read, or cat any files. The content is already here:\n\n");
-        systemPrompt += m_pendingRagContext;
-        systemPrompt += QStringLiteral(
-            "\n\nCite the file path when referencing specific information.\n");
-    }
 
     systemPrompt += QStringLiteral("\n\nCurrent system status:\n");
     systemPrompt += QStringLiteral("- CPU Usage: %1%\n").arg(m_system->cpuUsage(), 0, 'f', 1);
@@ -1325,49 +1311,38 @@ void JarvisBackend::tryRagPreFlight(const QString &userMessage, std::function<vo
         return;
     }
 
-    // For Ollama/llama.cpp: detect file-related queries and search Baloo directly.
-    // No LLM pre-flight — just keyword detection + Baloo search.
+    // Always try a Baloo search with meaningful words from the query.
+    // Baloo is fast — if nothing relevant is found, we skip injection.
     const QString lower = userMessage.toLower();
-    static const QStringList fileIndicators = {
-        QStringLiteral("file"), QStringLiteral("document"), QStringLiteral("readme"),
-        QStringLiteral("config"), QStringLiteral("log"), QStringLiteral("notes"),
-        QStringLiteral("what does"), QStringLiteral("what's in"), QStringLiteral("whats in"),
-        QStringLiteral("summarize"), QStringLiteral("summarise"), QStringLiteral("summary"),
-        QStringLiteral("contents of"), QStringLiteral("look up"), QStringLiteral("search for"),
-        QStringLiteral("find in"), QStringLiteral("read the"), QStringLiteral("show me"),
+    static const QStringList stopWords = {
+        QStringLiteral("the"), QStringLiteral("a"), QStringLiteral("an"), QStringLiteral("is"),
+        QStringLiteral("are"), QStringLiteral("was"), QStringLiteral("what"), QStringLiteral("how"),
+        QStringLiteral("does"), QStringLiteral("do"), QStringLiteral("in"), QStringLiteral("of"),
+        QStringLiteral("to"), QStringLiteral("for"), QStringLiteral("my"), QStringLiteral("me"),
+        QStringLiteral("about"), QStringLiteral("from"), QStringLiteral("that"), QStringLiteral("this"),
+        QStringLiteral("tell"), QStringLiteral("show"), QStringLiteral("give"),
+        QStringLiteral("please"), QStringLiteral("can"), QStringLiteral("you"),
+        QStringLiteral("just"), QStringLiteral("some"), QStringLiteral("like"),
+        QStringLiteral("play"), QStringLiteral("open"), QStringLiteral("hey"),
     };
-    static const QRegularExpression pathRe(QStringLiteral("(~/|/home/|\\.[a-z]{1,4}\\b)"));
-
-    bool needsRag = pathRe.match(lower).hasMatch();
-    if (!needsRag) {
-        for (const auto &ind : fileIndicators) {
-            if (lower.contains(ind)) { needsRag = true; break; }
-        }
+    QStringList terms;
+    for (const auto &word : lower.split(QRegularExpression(QStringLiteral("\\W+")), Qt::SkipEmptyParts)) {
+        if (word.length() > 2 && !stopWords.contains(word))
+            terms.append(word);
     }
-
-    if (needsRag) {
-        // Extract meaningful words as search terms (skip stop words)
-        static const QStringList stopWords = {
-            QStringLiteral("the"), QStringLiteral("a"), QStringLiteral("an"), QStringLiteral("is"),
-            QStringLiteral("are"), QStringLiteral("was"), QStringLiteral("what"), QStringLiteral("how"),
-            QStringLiteral("does"), QStringLiteral("do"), QStringLiteral("in"), QStringLiteral("of"),
-            QStringLiteral("to"), QStringLiteral("for"), QStringLiteral("my"), QStringLiteral("me"),
-            QStringLiteral("about"), QStringLiteral("from"), QStringLiteral("that"), QStringLiteral("this"),
-            QStringLiteral("file"), QStringLiteral("document"), QStringLiteral("find"),
-            QStringLiteral("search"), QStringLiteral("look"), QStringLiteral("read"),
-            QStringLiteral("tell"), QStringLiteral("show"), QStringLiteral("give"),
-            QStringLiteral("please"), QStringLiteral("can"), QStringLiteral("you"),
-            QStringLiteral("summarize"), QStringLiteral("summarise"), QStringLiteral("summary"),
-        };
-        QStringList terms;
-        for (const auto &word : lower.split(QRegularExpression(QStringLiteral("\\W+")), Qt::SkipEmptyParts)) {
-            if (word.length() > 2 && !stopWords.contains(word))
-                terms.append(word);
-        }
-        if (!terms.isEmpty()) {
-            const QString searchStr = terms.join(QLatin1Char(' '));
-            qDebug() << "[JARVIS] RAG pre-flight (keyword):" << searchStr;
-            m_pendingRagContext = m_rag->retrieveContext(searchStr);
+    if (!terms.isEmpty()) {
+        const QString searchStr = terms.join(QLatin1Char(' '));
+        const QString context = m_rag->retrieveContext(searchStr);
+        if (!context.isEmpty()) {
+            qDebug() << "[JARVIS] RAG: injecting file context for:" << searchStr;
+            setStatus(QStringLiteral("Found relevant files for: %1").arg(searchStr));
+            const QString ragMsg = QStringLiteral(
+                "[The following file contents were found on your computer. "
+                "Use them to answer the next question. "
+                "Do not try to open or read any files yourself.]\n\n%1").arg(context);
+            m_conversationHistory.push_back({QStringLiteral("user"), QJsonValue(ragMsg)});
+            m_conversationHistory.push_back({QStringLiteral("assistant"),
+                QJsonValue(QStringLiteral("I have the file contents. What would you like to know?"))});
         }
     }
     onComplete();

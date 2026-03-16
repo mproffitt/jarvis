@@ -1,6 +1,7 @@
 #include "jarvisrag.h"
 #include "../settings/jarvissettings.h"
 
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QDebug>
@@ -43,24 +44,79 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
     const QString searchString = searchTerms.join(QLatin1Char(' '));
     qDebug() << "[JARVIS] RAG search:" << searchString;
 
-    // Query Baloo
-    Baloo::Query balooQuery;
-    balooQuery.setSearchString(searchString);
-    balooQuery.setLimit(static_cast<uint>(maxFiles * 2)); // Get more results to filter
-    balooQuery.addType(QStringLiteral("Document"));
+    // Search each term individually and score by match count.
+    // Multi-word Baloo searches use AND logic which fails when content
+    // indexing is incomplete, so we search per-term and rank by hits.
+    QSet<QString> allPaths;
+    for (const auto &term : searchTerms) {
+        Baloo::Query q;
+        q.setSearchString(term);
+        q.setLimit(static_cast<uint>(maxFiles * 10));
 
-    Baloo::ResultIterator it = balooQuery.exec();
+        Baloo::ResultIterator it = q.exec();
+        while (it.next()) {
+            const QString path = it.filePath();
+            if (path.contains(QStringLiteral("/build/"))
+                || path.contains(QStringLiteral("/node_modules/"))
+                || (path.contains(QStringLiteral("/."))
+                    && !path.contains(QStringLiteral("/.config"))))
+                continue;
+            allPaths.insert(path);
+        }
+    }
+
+    // Score each file by how many search terms match its path.
+    // Uses exact substring match + fuzzy match (Levenshtein ≤ 2)
+    // on individual path components to handle whisper mishearings.
+    QMap<QString, int> fileScores;
+    for (const auto &path : allPaths) {
+        const QString lowerPath = path.toLower();
+        const QStringList pathParts = lowerPath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        int score = 0;
+        for (const auto &term : searchTerms) {
+            if (lowerPath.contains(term)) {
+                ++score;
+                continue;
+            }
+            // Fuzzy match against path components (edit distance ≤ 2)
+            if (term.length() >= 4) {
+                for (const auto &part : pathParts) {
+                    if (qAbs(term.length() - part.length()) > 2) continue;
+                    // Levenshtein distance
+                    const int tLen = term.length(), pLen = part.length();
+                    QList<int> prev(pLen + 1), curr(pLen + 1);
+                    for (int j = 0; j <= pLen; ++j) prev[j] = j;
+                    for (int i = 1; i <= tLen; ++i) {
+                        curr[0] = i;
+                        for (int j = 1; j <= pLen; ++j) {
+                            int cost = (term[i-1] == part[j-1]) ? 0 : 1;
+                            curr[j] = std::min({prev[j]+1, curr[j-1]+1, prev[j-1]+cost});
+                        }
+                        std::swap(prev, curr);
+                    }
+                    if (prev[pLen] <= 2) { ++score; break; }
+                }
+            }
+        }
+        // At least 1 point for being in Baloo results at all
+        fileScores[path] = qMax(score, 1);
+    }
+
+    // Sort by score (most matching terms in path first)
+    QList<QPair<int, QString>> ranked;
+    for (auto it = fileScores.constBegin(); it != fileScores.constEnd(); ++it)
+        ranked.append({it.value(), it.key()});
+    std::sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) {
+        return a.first > b.first;
+    });
 
     QString context;
     int fileCount = 0;
+    for (const auto &[score, filePath] : ranked) {
+        if (fileCount >= maxFiles) break;
 
-    while (it.next() && fileCount < maxFiles) {
-        const QString filePath = it.filePath();
         const QFileInfo info(filePath);
-
-        // Skip binary files, very large files, hidden directories
-        if (info.size() > 5 * 1024 * 1024) continue; // >5MB
-        if (filePath.contains(QStringLiteral("/.")) && !filePath.contains(QStringLiteral("/.config"))) continue;
+        if (info.size() > 5 * 1024 * 1024) continue;
 
         const QString text = extractFileText(filePath, maxCharsPerFile * 2);
         if (text.isEmpty()) continue;
@@ -70,31 +126,6 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
 
         context += QStringLiteral("\n--- File: %1 ---\n%2\n").arg(filePath, chunk);
         ++fileCount;
-    }
-
-    // If no Document type results, try without type filter
-    if (fileCount == 0) {
-        Baloo::Query fallbackQuery;
-        fallbackQuery.setSearchString(searchString);
-        fallbackQuery.setLimit(static_cast<uint>(maxFiles * 2));
-
-        Baloo::ResultIterator fit = fallbackQuery.exec();
-        while (fit.next() && fileCount < maxFiles) {
-            const QString filePath = fit.filePath();
-            const QFileInfo info(filePath);
-
-            if (info.size() > 5 * 1024 * 1024) continue;
-            if (filePath.contains(QStringLiteral("/.")) && !filePath.contains(QStringLiteral("/.config"))) continue;
-
-            const QString text = extractFileText(filePath, maxCharsPerFile * 2);
-            if (text.isEmpty()) continue;
-
-            const QString chunk = findRelevantChunk(text, searchString, maxCharsPerFile);
-            if (chunk.isEmpty()) continue;
-
-            context += QStringLiteral("\n--- File: %1 ---\n%2\n").arg(filePath, chunk);
-            ++fileCount;
-        }
     }
 
     if (context.isEmpty()) {
@@ -131,7 +162,7 @@ QString JarvisRag::extractFileText(const QString &filePath, int maxChars)
     };
 
     // Files without suffix might be text (README, Makefile, etc.)
-    if (!suffix.isEmpty() && !textSuffixes.contains(suffix)) return {};
+    if (!suffix.isEmpty() && !textSuffixes.contains(suffix.toLower())) return {};
 
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
