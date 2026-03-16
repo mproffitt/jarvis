@@ -61,6 +61,8 @@ public:
     [[nodiscard]] bool autoStartWakeWord() const { return m_autoStartWakeWord; }
     [[nodiscard]] bool noiseSuppressionEnabled() const { return m_noiseSuppression; }
     [[nodiscard]] QString whisperModel() const { return m_whisperModel; }
+    [[nodiscard]] bool whisperGpu() const { return m_whisperGpu; }
+    void setWhisperGpu(bool enabled);
     [[nodiscard]] QString wakeWord() const { return m_wakeWord; }
     [[nodiscard]] bool continuousMode() const { return m_continuousMode; }
     [[nodiscard]] bool smartRouting() const { return m_smartRouting; }
@@ -141,6 +143,7 @@ signals:
     void autoStartWakeWordChanged();
     void noiseSuppressionChanged();
     void whisperModelChanged();
+    void whisperGpuChanged();
     void wakeWordChanged();
     void continuousModeChanged();
     void smartRoutingChanged();
@@ -194,6 +197,7 @@ private:
     bool m_autoStartWakeWord{true};
     bool m_noiseSuppression{true};
     QString m_whisperModel{QStringLiteral("tiny")};
+    bool m_whisperGpu{false};
     QString m_wakeWord;
     bool m_continuousMode{false};
     bool m_smartRouting{false};

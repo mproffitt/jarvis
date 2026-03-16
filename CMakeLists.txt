@@ -41,14 +41,111 @@ find_package(KF6 REQUIRED COMPONENTS
 find_package(Plasma REQUIRED)
 
 # whisper.cpp - lightweight local speech recognition
-find_library(WHISPER_LIB NAMES whisper PATHS /usr/local/lib /usr/lib)
+# Try system install first; if not found or if CUDA is available (and system
+# whisper lacks it), build from source with GPU support auto-detected.
+option(WHISPER_BUILD_FROM_SOURCE "Force building whisper.cpp from source" OFF)
+
+find_library(WHISPER_LIB NAMES whisper PATHS /usr/local/lib64 /usr/local/lib /usr/lib64 /usr/lib)
 find_path(WHISPER_INC whisper.h PATHS /usr/local/include /usr/include)
-if(NOT WHISPER_LIB OR NOT WHISPER_INC)
-    message(FATAL_ERROR "whisper.cpp not found. Install it: https://github.com/ggerganov/whisper.cpp")
+
+# Check if CUDA toolkit is available
+find_program(NVCC_EXECUTABLE nvcc PATHS /usr/local/cuda/bin /usr/local/cuda-13.2/bin ENV PATH)
+if(NVCC_EXECUTABLE)
+    set(CUDA_AVAILABLE TRUE)
+    message(STATUS "CUDA compiler found: ${NVCC_EXECUTABLE}")
+else()
+    set(CUDA_AVAILABLE FALSE)
 endif()
-set(WHISPER_LIBRARIES ${WHISPER_LIB})
-set(WHISPER_INCLUDE_DIRS ${WHISPER_INC})
-message(STATUS "Found whisper: ${WHISPER_LIB}")
+
+# Check if system whisper has CUDA support
+set(SYSTEM_WHISPER_HAS_CUDA FALSE)
+if(WHISPER_LIB)
+    execute_process(
+        COMMAND ldd ${WHISPER_LIB}
+        OUTPUT_VARIABLE _whisper_ldd
+        ERROR_QUIET)
+    if(_whisper_ldd MATCHES "libcuda|libcublas|libggml-cuda")
+        set(SYSTEM_WHISPER_HAS_CUDA TRUE)
+    endif()
+endif()
+
+# Build from source if: forced, not found, or CUDA available but system whisper lacks it
+if(WHISPER_BUILD_FROM_SOURCE
+   OR NOT WHISPER_LIB OR NOT WHISPER_INC
+   OR (CUDA_AVAILABLE AND NOT SYSTEM_WHISPER_HAS_CUDA))
+
+    if(CUDA_AVAILABLE AND NOT SYSTEM_WHISPER_HAS_CUDA)
+        message(STATUS "System whisper.cpp lacks CUDA — building from source with GPU support")
+    elseif(NOT WHISPER_LIB)
+        message(STATUS "whisper.cpp not found — building from source")
+    else()
+        message(STATUS "Building whisper.cpp from source (forced)")
+    endif()
+
+    include(FetchContent)
+    FetchContent_Declare(
+        whisper_cpp
+        GIT_REPOSITORY https://github.com/ggerganov/whisper.cpp.git
+        GIT_TAG v1.7.6
+    )
+
+    # Configure whisper.cpp build options
+    set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+    set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+    if(CUDA_AVAILABLE)
+        set(GGML_CUDA ON CACHE BOOL "" FORCE)
+        set(CMAKE_CUDA_COMPILER ${NVCC_EXECUTABLE} CACHE FILEPATH "" FORCE)
+        message(STATUS "Enabling CUDA for whisper.cpp (${NVCC_EXECUTABLE})")
+    endif()
+
+    # Populate first, then add subdirectory with relaxed flags
+    FetchContent_Populate(whisper_cpp)
+
+    # Disable upstream install rules — we handle installation ourselves
+    set(GGML_INSTALL OFF CACHE BOOL "" FORCE)
+    set(WHISPER_INSTALL OFF CACHE BOOL "" FORCE)
+
+    # Temporarily relax compiler flags for whisper.cpp — KDE's strict
+    # settings conflict with ggml's exception handling code
+    set(_saved_cxx_flags "${CMAKE_CXX_FLAGS}")
+    set(_saved_c_flags "${CMAKE_C_FLAGS}")
+    set(CMAKE_CXX_FLAGS "-fpermissive -Wno-error")
+    set(CMAKE_C_FLAGS "-Wno-error")
+
+    add_subdirectory(${whisper_cpp_SOURCE_DIR} ${whisper_cpp_BINARY_DIR} EXCLUDE_FROM_ALL)
+
+    set(CMAKE_CXX_FLAGS "${_saved_cxx_flags}")
+    set(CMAKE_C_FLAGS "${_saved_c_flags}")
+
+    set(WHISPER_LIBRARIES whisper)
+    set(WHISPER_INCLUDE_DIRS
+        ${whisper_cpp_SOURCE_DIR}/include
+        ${whisper_cpp_SOURCE_DIR}/ggml/include)
+    set(WHISPER_BUILT_FROM_SOURCE TRUE)
+
+    # Install whisper and ggml libraries — override upstream install rules
+    # to use KDE_INSTALL_LIBDIR and avoid missing header errors
+    foreach(_tgt whisper ggml ggml-base ggml-cpu)
+        if(TARGET ${_tgt})
+            set_target_properties(${_tgt} PROPERTIES
+                INSTALL_RPATH_USE_LINK_PATH TRUE)
+            install(TARGETS ${_tgt} LIBRARY DESTINATION ${KDE_INSTALL_LIBDIR})
+        endif()
+    endforeach()
+    if(TARGET ggml-cuda)
+        set_target_properties(ggml-cuda PROPERTIES
+            INSTALL_RPATH_USE_LINK_PATH TRUE)
+        install(TARGETS ggml-cuda LIBRARY DESTINATION ${KDE_INSTALL_LIBDIR})
+    endif()
+
+    message(STATUS "whisper.cpp will be built from source (CUDA: ${CUDA_AVAILABLE})")
+else()
+    set(WHISPER_LIBRARIES ${WHISPER_LIB})
+    set(WHISPER_INCLUDE_DIRS ${WHISPER_INC})
+    message(STATUS "Found system whisper: ${WHISPER_LIB} (CUDA: ${SYSTEM_WHISPER_HAS_CUDA})")
+endif()
 
 # PipeWire for mic-busy detection
 find_package(PkgConfig REQUIRED)

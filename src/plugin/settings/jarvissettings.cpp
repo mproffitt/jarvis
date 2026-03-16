@@ -168,6 +168,7 @@ void JarvisSettings::loadSettings()
     m_autoStartWakeWord = m_settings.value(QStringLiteral("audio/autoStartWakeWord"), true).toBool();
     m_noiseSuppression = m_settings.value(QStringLiteral("audio/noiseSuppression"), true).toBool();
     m_whisperModel = m_settings.value(QStringLiteral("audio/whisperModel"), QStringLiteral("tiny")).toString();
+    m_whisperGpu = m_settings.value(QStringLiteral("audio/whisperGpu"), false).toBool();
     m_wakeWord = m_settings.value(QStringLiteral("audio/wakeWord"), QStringLiteral("jarvis")).toString();
     m_continuousMode = m_settings.value(QStringLiteral("audio/continuousMode"), false).toBool();
     m_smartRouting = m_settings.value(QStringLiteral("llm/smartRouting"), false).toBool();
@@ -209,6 +210,7 @@ void JarvisSettings::saveSettings()
     m_settings.setValue(QStringLiteral("audio/autoStartWakeWord"), m_autoStartWakeWord);
     m_settings.setValue(QStringLiteral("audio/noiseSuppression"), m_noiseSuppression);
     m_settings.setValue(QStringLiteral("audio/whisperModel"), m_whisperModel);
+    m_settings.setValue(QStringLiteral("audio/whisperGpu"), m_whisperGpu);
     m_settings.setValue(QStringLiteral("audio/wakeWord"), m_wakeWord);
     m_settings.setValue(QStringLiteral("audio/continuousMode"), m_continuousMode);
     m_settings.setValue(QStringLiteral("llm/smartRouting"), m_smartRouting);
@@ -454,6 +456,15 @@ void JarvisSettings::setWhisperModel(const QString &model)
         m_whisperModel = model;
         saveSettings();
         emit whisperModelChanged();
+    }
+}
+
+void JarvisSettings::setWhisperGpu(bool enabled)
+{
+    if (m_whisperGpu != enabled) {
+        m_whisperGpu = enabled;
+        saveSettings();
+        emit whisperGpuChanged();
     }
 }
 
