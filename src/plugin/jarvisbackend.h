@@ -343,7 +343,9 @@ private:
     QJsonArray builtinToolsForOpenAI() const;
     bool dispatchToolCall(const QString &name, const QJsonObject &args,
                           std::function<void(QJsonArray, bool)> callback);
-    void doRagSearch(const QString &userMessage);
+    QString doRagSearch(const QString &userMessage);
+    void onRagFinished(const QString &userMessage, const QString &context);
+    void continueToLlm(const QString &userMessage);
     QString extractStreamToken(const QString &jsonStr) const;
     void connectModuleSignals();
     void trySpeakCompleteSentences();

@@ -34,6 +34,7 @@ target_link_libraries(jarvis_plugin
     KF6::I18n
     KF6::Wallet
     KF6::Baloo
+    KF6::FileMetaData
     ${WHISPER_LIBRARIES}
     ${PIPEWIRE_LIBRARIES}
     ${RNNOISE_LIBRARIES}

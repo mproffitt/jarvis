@@ -23,6 +23,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QtConcurrent>
 #include <QDateTime>
 #include <QDebug>
 
@@ -1052,9 +1053,19 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
     m_streamingResponse.clear();
     emit streamingResponseChanged();
 
-    // Search local files if relevant (synchronous, before sending to LLM)
-    doRagSearch(userMessage);
+    // Search local files if relevant (asynchronous)
+    QtConcurrent::run([this, userMessage]() {
+        const QString context = doRagSearch(userMessage);
+        
+        // Return to main thread to continue sending to LLM
+        QMetaObject::invokeMethod(this, [this, userMessage, context]() {
+            onRagFinished(userMessage, context);
+        }, Qt::QueuedConnection);
+    });
+}
 
+void JarvisBackend::continueToLlm(const QString &userMessage)
+{
     // Build request based on provider
     QJsonObject requestBody;
     QUrl url;
@@ -1298,73 +1309,44 @@ bool JarvisBackend::dispatchToolCall(const QString &name, const QJsonObject &arg
     return true;
 }
 
-void JarvisBackend::doRagSearch(const QString &userMessage)
+QString JarvisBackend::doRagSearch(const QString &userMessage)
 {
-    m_ragActive = false; // Reset from previous query
-
     // For providers with native tool support, skip — file_search tool handles it
     if (m_settings->isClaudeProvider() || m_settings->llmProvider() == QStringLiteral("openai"))
-        return;
+        return {};
 
-    // Only search when the query mentions files, documents, or paths
-    const QString lower = userMessage.toLower();
-    static const QStringList fileIndicators = {
-        QStringLiteral("file"), QStringLiteral("document"), QStringLiteral("readme"),
-        QStringLiteral("config"), QStringLiteral("log"), QStringLiteral("notes"),
-        QStringLiteral("summarize"), QStringLiteral("summarise"), QStringLiteral("summary"),
-        QStringLiteral("contents"), QStringLiteral("look up"), QStringLiteral("search for"),
-        QStringLiteral("find in"), QStringLiteral("read the"), QStringLiteral("repo"),
-        QStringLiteral("project"), QStringLiteral("codebase"), QStringLiteral("source"),
-    };
-    static const QRegularExpression pathRe(QStringLiteral("(~/|/home/|\\.[a-z]{1,4}\\b)"));
-    bool needsSearch = pathRe.match(lower).hasMatch();
-    if (!needsSearch) {
-        for (const auto &ind : fileIndicators) {
-            if (lower.contains(ind)) { needsSearch = true; break; }
-        }
-    }
-    if (!needsSearch) return;
-    static const QStringList stopWords = {
-        QStringLiteral("the"), QStringLiteral("a"), QStringLiteral("an"), QStringLiteral("is"),
-        QStringLiteral("are"), QStringLiteral("was"), QStringLiteral("what"), QStringLiteral("how"),
-        QStringLiteral("does"), QStringLiteral("do"), QStringLiteral("in"), QStringLiteral("of"),
-        QStringLiteral("to"), QStringLiteral("for"), QStringLiteral("my"), QStringLiteral("me"),
-        QStringLiteral("about"), QStringLiteral("from"), QStringLiteral("that"), QStringLiteral("this"),
-        QStringLiteral("tell"), QStringLiteral("show"), QStringLiteral("give"),
-        QStringLiteral("talk"), QStringLiteral("know"), QStringLiteral("think"),
-        QStringLiteral("please"), QStringLiteral("can"), QStringLiteral("you"),
-        QStringLiteral("just"), QStringLiteral("some"), QStringLiteral("like"),
-        QStringLiteral("play"), QStringLiteral("open"), QStringLiteral("hey"),
-    };
-    QStringList terms;
-    for (const auto &word : lower.split(QRegularExpression(QStringLiteral("\\W+")), Qt::SkipEmptyParts)) {
-        if (word.length() > 2 && !stopWords.contains(word))
-            terms.append(word);
-    }
-    if (terms.isEmpty()) return;
+    const QStringList terms = JarvisRag::extractSearchTerms(userMessage);
+    if (terms.isEmpty()) return {};
 
     const QString searchStr = terms.join(QLatin1Char(' '));
-    const QString context = m_rag->retrieveContext(searchStr);
-    if (context.isEmpty()) return;
+    return m_rag->retrieveContext(searchStr);
+}
 
-    qDebug() << "[JARVIS] RAG: injecting file context for:" << searchStr;
-    setStatus(QStringLiteral("Found relevant files for: %1").arg(searchStr));
+void JarvisBackend::onRagFinished(const QString &userMessage, const QString &context)
+{
+    m_ragActive = !context.isEmpty();
 
-    // Prepend file content to the user's actual message so it's the most
-    // recent context the model sees — not buried in earlier history.
-    // Modify the last user message in conversation history to include it.
-    if (!m_conversationHistory.empty()) {
-        auto &last = m_conversationHistory.back();
-        if (last.role == QStringLiteral("user")) {
-            const QString original = last.content.toString();
-            last.content = QJsonValue(QStringLiteral(
-                "Here are relevant files from my computer:\n\n%1\n\n"
-                "Using ONLY the file contents above, answer this: %2\n"
-                "Do NOT open, read, or cat any files. Do NOT use ACTION blocks.")
-                .arg(context, original));
+    if (m_ragActive) {
+        qDebug() << "[JARVIS] RAG: injecting file context";
+        setStatus(QStringLiteral("Found relevant files."));
+
+        // Prepend file content to the user's actual message so it's the most
+        // recent context the model sees — not buried in earlier history.
+        if (!m_conversationHistory.empty()) {
+            auto &last = m_conversationHistory.back();
+            if (last.role == QStringLiteral("user")) {
+                const QString original = last.content.toString();
+                last.content = QJsonValue(QStringLiteral(
+                    "Here are relevant files from my computer:\n\n%1\n\n"
+                    "Using ONLY the file contents above, answer this: %2\n"
+                    "Do NOT open, read, or cat any files. Do NOT use ACTION blocks.")
+                    .arg(context, original));
+            }
         }
     }
-    m_ragActive = true;
+
+    // Now proceed with sending to LLM
+    continueToLlm(userMessage);
 }
 
 QJsonArray JarvisBackend::buildConversationContext() const

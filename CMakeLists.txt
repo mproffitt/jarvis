@@ -36,6 +36,7 @@ find_package(KF6 REQUIRED COMPONENTS
     Config
     Wallet
     Baloo
+    FileMetaData
 )
 
 find_package(Plasma REQUIRED)

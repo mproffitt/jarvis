@@ -5,10 +5,17 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QDebug>
+#include <QMimeDatabase>
 #include <QRegularExpression>
 
 #include <Baloo/Query>
 #include <Baloo/ResultIterator>
+
+#include <KFileMetaData/ExtractorCollection>
+#include <KFileMetaData/Extractor>
+#include <KFileMetaData/SimpleExtractionResult>
+
+#include <cmath>
 
 JarvisRag::JarvisRag(JarvisSettings *settings, QObject *parent)
     : QObject(parent)
@@ -16,11 +23,9 @@ JarvisRag::JarvisRag(JarvisSettings *settings, QObject *parent)
 {
 }
 
-
-QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCharsPerFile) const
+const QStringList &JarvisRag::stopWords()
 {
-    // Extract search terms — remove common stop words
-    static const QStringList stopWords = {
+    static const QStringList words = {
         QStringLiteral("the"), QStringLiteral("a"), QStringLiteral("an"), QStringLiteral("is"),
         QStringLiteral("are"), QStringLiteral("was"), QStringLiteral("what"), QStringLiteral("how"),
         QStringLiteral("does"), QStringLiteral("do"), QStringLiteral("in"), QStringLiteral("of"),
@@ -28,17 +33,31 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
         QStringLiteral("about"), QStringLiteral("from"), QStringLiteral("that"), QStringLiteral("this"),
         QStringLiteral("file"), QStringLiteral("document"), QStringLiteral("find"),
         QStringLiteral("search"), QStringLiteral("look"), QStringLiteral("read"),
-        QStringLiteral("tell"), QStringLiteral("say"), QStringLiteral("says"),
+        QStringLiteral("tell"), QStringLiteral("show"), QStringLiteral("give"),
+        QStringLiteral("say"), QStringLiteral("says"), QStringLiteral("talk"),
+        QStringLiteral("know"), QStringLiteral("think"),
         QStringLiteral("please"), QStringLiteral("can"), QStringLiteral("you"),
+        QStringLiteral("just"), QStringLiteral("some"), QStringLiteral("like"),
+        QStringLiteral("play"), QStringLiteral("open"), QStringLiteral("hey"),
     };
+    return words;
+}
 
-    QStringList words = query.toLower().split(QRegularExpression(QStringLiteral("\\W+")), Qt::SkipEmptyParts);
-    QStringList searchTerms;
+QStringList JarvisRag::extractSearchTerms(const QString &query)
+{
+    const auto &sw = stopWords();
+    QStringList terms;
+    const auto words = query.toLower().split(QRegularExpression(QStringLiteral("\\W+")), Qt::SkipEmptyParts);
     for (const auto &word : words) {
-        if (word.length() > 2 && !stopWords.contains(word))
-            searchTerms.append(word);
+        if (word.length() > 2 && !sw.contains(word))
+            terms.append(word);
     }
+    return terms;
+}
 
+QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCharsPerFile) const
+{
+    const QStringList searchTerms = extractSearchTerms(query);
     if (searchTerms.isEmpty()) return {};
 
     const QString searchString = searchTerms.join(QLatin1Char(' '));
@@ -65,24 +84,20 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
         }
     }
 
-    // Score each file by how many search terms match its path.
+    // Stage 1: Score each file by how many search terms match its path.
     // Uses exact substring match + fuzzy match (Levenshtein ≤ 2)
     // on individual path components to handle whisper mishearings.
-    // Bonus points when a single directory component matches multiple terms
-    // (e.g. "workload-clusters-fleet" matching "workload", "clusters", "fleet").
     QMap<QString, int> fileScores;
     for (const auto &path : allPaths) {
         const QString lowerPath = path.toLower();
         const QStringList pathParts = lowerPath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
         int score = 0;
 
-        // Check each term against the full path
         for (const auto &term : searchTerms) {
             if (lowerPath.contains(term)) {
                 ++score;
                 continue;
             }
-            // Fuzzy match against path components (edit distance ≤ 2)
             if (term.length() >= 4) {
                 for (const auto &part : pathParts) {
                     if (qAbs(term.length() - part.length()) > 2) continue;
@@ -103,16 +118,16 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
         }
 
         // Bonus: a single path component matching multiple search terms
-        // (e.g. dir "workload-clusters-fleet" matches 3 terms at once)
         for (const auto &part : pathParts) {
             int partMatches = 0;
             for (const auto &term : searchTerms) {
                 if (part.contains(term)) ++partMatches;
             }
-            if (partMatches >= 2) score += partMatches; // Bonus for concentrated matches
+            if (partMatches >= 2) score += partMatches;
         }
 
-        fileScores[path] = qMax(score, 1);
+        if (score > 0)
+            fileScores[path] = score;
     }
 
     // Sort by score, with README files getting a tiebreaker boost
@@ -121,33 +136,95 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
         int bonus = 0;
         const QString lower = it.key().toLower();
         if (lower.endsWith(QStringLiteral("readme.md")) || lower.endsWith(QStringLiteral("readme")))
-            bonus = 1; // Slight boost for READMEs at same score level
+            bonus = 1;
         ranked.append({it.value() * 10 + bonus, it.key()});
     }
     std::sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) {
         return a.first > b.first;
     });
 
-    // Only include files that match at least 2 search terms in their path.
-    // Single-term matches are too noisy (generic words match everything).
-    QString context;
-    int fileCount = 0;
+    // Stage 1 filter: accept files with at least 1 term match (score >= 10).
+    // Take top 20 candidates for content scoring.
+    constexpr int maxCandidates = 20;
+    QList<QPair<int, QString>> candidates;
     for (const auto &[score, filePath] : ranked) {
-        if (fileCount >= maxFiles) break;
-        if (score < 20) continue; // Skip weak matches (scores are *10 for tiebreaker)
+        if (candidates.size() >= maxCandidates) break;
+        if (score < 10) continue;
 
         const QFileInfo info(filePath);
         if (info.size() > 5 * 1024 * 1024) continue;
+        candidates.append({score, filePath});
+    }
 
+    // Stage 2: Content-based scoring on candidates.
+    // Score by term frequency normalized by sqrt(doc length), times distinct terms found.
+    m_textCache.clear();
+    struct ContentScore { double score; QString path; };
+    QList<ContentScore> contentRanked;
+
+    for (const auto &[pathScore, filePath] : candidates) {
         const QString text = extractFileText(filePath, maxCharsPerFile * 2);
         if (text.isEmpty()) continue;
 
+        m_textCache[filePath] = text;
+
+        const QString lowerText = text.toLower();
+        int totalHits = 0;
+        int distinctTerms = 0;
+
+        for (const auto &term : searchTerms) {
+            int count = 0;
+            int pos = 0;
+            while ((pos = lowerText.indexOf(term, pos)) != -1) {
+                ++count;
+                pos += term.length();
+            }
+            if (count > 0) {
+                totalHits += count;
+                ++distinctTerms;
+            }
+        }
+
+        if (distinctTerms == 0) {
+            // No content match — only keep if path match was VERY strong (e.g. filename match)
+            if (pathScore >= 20) { // Multiple terms matched in path
+                contentRanked.append({pathScore * 0.05, filePath});
+            }
+            continue;
+        }
+
+        const double docLen = std::max(1.0, std::sqrt(static_cast<double>(lowerText.length())));
+        const double score = (static_cast<double>(totalHits) / docLen) * distinctTerms;
+        contentRanked.append({score, filePath});
+
+        qDebug() << "[JARVIS] RAG: content score" << filePath
+                 << "hits=" << totalHits << "distinct=" << distinctTerms
+                 << "score=" << score;
+    }
+
+    std::sort(contentRanked.begin(), contentRanked.end(), [](const auto &a, const auto &b) {
+        return a.score > b.score;
+    });
+
+    // Pick top results
+    QString context;
+    int fileCount = 0;
+    for (const auto &[score, filePath] : contentRanked) {
+        if (fileCount >= maxFiles) break;
+
+        const QString &text = m_textCache.contains(filePath)
+            ? m_textCache[filePath]
+            : (m_textCache[filePath] = extractFileText(filePath, maxCharsPerFile * 2));
+        if (text.isEmpty()) continue;
+
         const QString chunk = findRelevantChunk(text, searchString, maxCharsPerFile);
-        if (chunk.isEmpty()) continue;
+        if (chunk.trimmed().isEmpty()) continue;
 
         context += QStringLiteral("\n--- File: %1 ---\n%2\n").arg(filePath, chunk);
         ++fileCount;
     }
+
+    m_textCache.clear();
 
     if (context.isEmpty()) {
         qDebug() << "[JARVIS] RAG: no relevant files found";
@@ -158,33 +235,59 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
     return context.trimmed();
 }
 
-QString JarvisRag::extractFileText(const QString &filePath, int maxChars)
+QString JarvisRag::extractFileText(const QString &filePath, int maxChars) const
 {
     const QFileInfo info(filePath);
-    const QString suffix = info.suffix().toLower();
+    if (info.isDir()) {
+        const QDir dir(filePath);
+        static const QStringList readmeNames = {
+            QStringLiteral("README.md"), QStringLiteral("README.markdown"),
+            QStringLiteral("README.txt"), QStringLiteral("README"),
+            QStringLiteral("readme.md"), QStringLiteral("readme.txt"),
+            QStringLiteral("readme")
+        };
+        for (const auto &name : readmeNames) {
+            if (dir.exists(name)) {
+                return extractFileText(dir.absoluteFilePath(name), maxChars);
+            }
+        }
+        return {};
+    }
 
-    // Only handle text-based files
-    static const QStringList textSuffixes = {
-        QStringLiteral("txt"), QStringLiteral("md"), QStringLiteral("markdown"),
-        QStringLiteral("rst"), QStringLiteral("org"), QStringLiteral("csv"),
-        QStringLiteral("json"), QStringLiteral("yaml"), QStringLiteral("yml"),
-        QStringLiteral("toml"), QStringLiteral("ini"), QStringLiteral("conf"),
-        QStringLiteral("cfg"), QStringLiteral("xml"), QStringLiteral("html"),
-        QStringLiteral("htm"), QStringLiteral("css"), QStringLiteral("js"),
-        QStringLiteral("ts"), QStringLiteral("py"), QStringLiteral("rb"),
-        QStringLiteral("go"), QStringLiteral("rs"), QStringLiteral("c"),
-        QStringLiteral("cpp"), QStringLiteral("h"), QStringLiteral("hpp"),
-        QStringLiteral("java"), QStringLiteral("kt"), QStringLiteral("sh"),
-        QStringLiteral("bash"), QStringLiteral("zsh"), QStringLiteral("fish"),
-        QStringLiteral("cmake"), QStringLiteral("makefile"),
-        QStringLiteral("dockerfile"), QStringLiteral("tf"),
-        QStringLiteral("hcl"), QStringLiteral("nix"), QStringLiteral("qml"),
-        QStringLiteral("tex"), QStringLiteral("log"), QStringLiteral("env"),
-    };
+    const QString mimeType = QMimeDatabase().mimeTypeForFile(filePath).name();
 
-    // Files without suffix might be text (README, Makefile, etc.)
-    if (!suffix.isEmpty() && !textSuffixes.contains(suffix.toLower())) return {};
+    // Only process document/text MIME types — skip audio, video, images, etc.
+    if (!mimeType.startsWith(QStringLiteral("text/"))
+        && !mimeType.startsWith(QStringLiteral("application/pdf"))
+        && !mimeType.startsWith(QStringLiteral("application/vnd.oasis.opendocument"))
+        && !mimeType.startsWith(QStringLiteral("application/vnd.openxmlformats-officedocument"))
+        && !mimeType.startsWith(QStringLiteral("application/msword"))
+        && !mimeType.startsWith(QStringLiteral("application/vnd.ms-"))
+        && !mimeType.startsWith(QStringLiteral("application/rtf"))
+        && !mimeType.startsWith(QStringLiteral("application/json"))
+        && !mimeType.startsWith(QStringLiteral("application/xml"))
+        && !mimeType.startsWith(QStringLiteral("application/x-yaml"))
+        && !mimeType.startsWith(QStringLiteral("application/toml"))
+        && !mimeType.startsWith(QStringLiteral("application/x-shellscript"))
+        && !mimeType.startsWith(QStringLiteral("application/x-desktop"))
+        && !mimeType.startsWith(QStringLiteral("application/epub"))) {
+        return {};
+    }
 
+    // Try KFileMetaData extractors first (handles PDF, ODT, DOCX, etc.)
+    auto extractors = m_extractorCollection.fetchExtractors(mimeType);
+    if (!extractors.isEmpty()) {
+        KFileMetaData::SimpleExtractionResult result(filePath, mimeType,
+            KFileMetaData::ExtractionResult::ExtractPlainText);
+        extractors.first()->extract(&result);
+        QString text = result.text().left(maxChars);
+        if (!text.trimmed().isEmpty()) {
+            qDebug() << "[JARVIS] RAG: extracted via KFileMetaData:" << filePath;
+            return text;
+        }
+    }
+
+    // Fallback: direct read for plain text files
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
 
@@ -203,8 +306,6 @@ QString JarvisRag::extractFileText(const QString &filePath, int maxChars)
 
 QString JarvisRag::findRelevantChunk(const QString &text, const QString &query, int maxChars)
 {
-    if (text.length() <= maxChars) return text;
-
     // Find the section of the text most relevant to the query
     const QStringList terms = query.split(QLatin1Char(' '), Qt::SkipEmptyParts);
     const QStringList lines = text.split(QLatin1Char('\n'));
@@ -224,8 +325,9 @@ QString JarvisRag::findRelevantChunk(const QString &text, const QString &query, 
     }
 
     if (scored.isEmpty()) {
-        // No matches — return the beginning
-        return text.left(maxChars);
+        // No matches — if the text is short, we can return it all, 
+        // but if it's long and doesn't match, return empty to skip it.
+        return text.length() <= maxChars ? text : QString();
     }
 
     // Find the highest-scoring line
@@ -241,7 +343,6 @@ QString JarvisRag::findRelevantChunk(const QString &text, const QString &query, 
     // Extract a window around the best match
     QString chunk;
     int chars = 0;
-    // Start a few lines before the best match
     const int startLine = qMax(0, bestIdx - 5);
     for (int i = startLine; i < lines.size() && chars < maxChars; ++i) {
         chunk += lines[i] + QLatin1Char('\n');
