@@ -1032,6 +1032,11 @@ void JarvisBackend::sendMessage(const QString &message)
 
 void JarvisBackend::sendToLlm(const QString &userMessage)
 {
+    if (m_processing || m_streamReply) {
+        qDebug() << "[JARVIS] sendToLlm BLOCKED — already processing:" << userMessage.left(50);
+        return;
+    }
+
     m_processing = true;
     emit processingChanged();
     setStatus("Processing...");
@@ -1298,8 +1303,24 @@ void JarvisBackend::doRagSearch(const QString &userMessage)
     if (m_settings->isClaudeProvider() || m_settings->llmProvider() == QStringLiteral("openai"))
         return;
 
-    // Extract meaningful search terms
+    // Only search when the query mentions files, documents, or paths
     const QString lower = userMessage.toLower();
+    static const QStringList fileIndicators = {
+        QStringLiteral("file"), QStringLiteral("document"), QStringLiteral("readme"),
+        QStringLiteral("config"), QStringLiteral("log"), QStringLiteral("notes"),
+        QStringLiteral("summarize"), QStringLiteral("summarise"), QStringLiteral("summary"),
+        QStringLiteral("contents"), QStringLiteral("look up"), QStringLiteral("search for"),
+        QStringLiteral("find in"), QStringLiteral("read the"), QStringLiteral("repo"),
+        QStringLiteral("project"), QStringLiteral("codebase"), QStringLiteral("source"),
+    };
+    static const QRegularExpression pathRe(QStringLiteral("(~/|/home/|\\.[a-z]{1,4}\\b)"));
+    bool needsSearch = pathRe.match(lower).hasMatch();
+    if (!needsSearch) {
+        for (const auto &ind : fileIndicators) {
+            if (lower.contains(ind)) { needsSearch = true; break; }
+        }
+    }
+    if (!needsSearch) return;
     static const QStringList stopWords = {
         QStringLiteral("the"), QStringLiteral("a"), QStringLiteral("an"), QStringLiteral("is"),
         QStringLiteral("are"), QStringLiteral("was"), QStringLiteral("what"), QStringLiteral("how"),
