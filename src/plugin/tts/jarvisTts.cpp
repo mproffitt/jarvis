@@ -82,8 +82,10 @@ void JarvisTts::ensurePwCat()
         m_playProc = nullptr;
     }
 
-    // Kill any draining pw-cat from a previous response to prevent cross-talk
+    // If a previous pw-cat is draining, reuse it instead of creating a new one
     if (m_draining) {
+        // The draining process still has its stdin closed — can't reuse it.
+        // Kill it and create fresh.
         m_draining->kill();
         m_draining->deleteLater();
         m_draining = nullptr;
@@ -96,6 +98,7 @@ void JarvisTts::ensurePwCat()
         QStringLiteral("--raw"),
         QStringLiteral("--rate=22050"),
         QStringLiteral("--channels=1"),
+        QStringLiteral("--properties=media.name=J.A.R.V.I.S.,node.name=J.A.R.V.I.S."),
         QStringLiteral("--format=s16"),
         QStringLiteral("-")
     });
@@ -281,22 +284,17 @@ void JarvisTts::processNextSentence()
         if (m_sentenceQueue.isEmpty()) {
             m_playingBack = false;
 #ifdef HAVE_LIBPIPER
-            // Close stdin so pw-cat plays remaining buffered audio then exits.
-            // Defer speakingChanged until pw-cat finishes so the mic doesn't
-            // reopen while audio is still playing.
+            // Keep pw-cat alive for future sentences — don't close/drain it.
+            // It will be killed in stop() or when a new batch starts after
+            // the mic reopens. Defer speakingChanged slightly to let pw-cat
+            // flush its buffer.
             if (m_playProc) {
-                m_playProc->closeWriteChannel();
-                connect(m_playProc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
-                        this, [this](int, QProcess::ExitStatus) {
-                    sender()->deleteLater();
-                    if (m_draining) {
-                        m_draining = nullptr;
+                QTimer::singleShot(300, this, [this]() {
+                    if (!m_playingBack) {
                         m_speaking = false;
                         emit speakingChanged();
                     }
                 });
-                m_draining = m_playProc;
-                m_playProc = nullptr;
             } else {
                 m_speaking = false;
                 emit speakingChanged();

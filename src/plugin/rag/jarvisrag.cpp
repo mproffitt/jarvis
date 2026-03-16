@@ -110,10 +110,13 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
         return a.first > b.first;
     });
 
+    // Only include files that match at least 2 search terms in their path.
+    // Single-term matches are too noisy (generic words match everything).
     QString context;
     int fileCount = 0;
     for (const auto &[score, filePath] : ranked) {
         if (fileCount >= maxFiles) break;
+        if (score < 2) continue; // Skip weak matches
 
         const QFileInfo info(filePath);
         if (info.size() > 5 * 1024 * 1024) continue;

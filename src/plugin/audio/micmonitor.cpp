@@ -150,8 +150,8 @@ void MicMonitor::onNodeAdded(uint32_t id, const char * /*mediaClass*/, const cha
 {
     // Skip our own capture stream
     if (appName && (strstr(appName, "plasmashell") != nullptr ||
-                    strstr(appName, "jarvis-capture") != nullptr ||
-                    strstr(appName, "Jarvis") != nullptr))
+                    strstr(appName, "jarvis") != nullptr ||
+                    strstr(appName, "J.A.R.V.I.S.") != nullptr))
         return;
 
     qDebug() << "[JARVIS] MicMonitor: capture started by" << appName << "(id:" << id << ")";

@@ -1046,14 +1046,8 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
     m_streamingResponse.clear();
     emit streamingResponseChanged();
 
-    // For non-tool providers, check if we need to search files first
-    m_pendingUserMessage = userMessage;
-    tryRagPreFlight(userMessage, [this]() { sendToLlmContinuation(); });
-}
-
-void JarvisBackend::sendToLlmContinuation()
-{
-    const QString userMessage = m_pendingUserMessage;
+    // Search local files if relevant (synchronous, before sending to LLM)
+    doRagSearch(userMessage);
 
     // Build request based on provider
     QJsonObject requestBody;
@@ -1198,9 +1192,6 @@ void JarvisBackend::sendToLlmContinuation()
     m_streamReply = m_networkManager->post(request, QJsonDocument(requestBody).toJson());
     connect(m_streamReply, &QNetworkReply::readyRead, this, &JarvisBackend::onLlmStreamReadyRead);
     connect(m_streamReply, &QNetworkReply::finished, this, &JarvisBackend::onLlmStreamFinished);
-
-    // Clear RAG context after it's been used in the system prompt
-    m_pendingRagContext.clear();
 }
 
 QString JarvisBackend::buildSystemPrompt() const
@@ -1301,18 +1292,13 @@ bool JarvisBackend::dispatchToolCall(const QString &name, const QJsonObject &arg
     return true;
 }
 
-void JarvisBackend::tryRagPreFlight(const QString &userMessage, std::function<void()> onComplete)
+void JarvisBackend::doRagSearch(const QString &userMessage)
 {
-    m_pendingRagContext.clear();
-
     // For providers with native tool support, skip — file_search tool handles it
-    if (m_settings->isClaudeProvider() || m_settings->llmProvider() == QStringLiteral("openai")) {
-        onComplete();
+    if (m_settings->isClaudeProvider() || m_settings->llmProvider() == QStringLiteral("openai"))
         return;
-    }
 
-    // Always try a Baloo search with meaningful words from the query.
-    // Baloo is fast — if nothing relevant is found, we skip injection.
+    // Extract meaningful search terms
     const QString lower = userMessage.toLower();
     static const QStringList stopWords = {
         QStringLiteral("the"), QStringLiteral("a"), QStringLiteral("an"), QStringLiteral("is"),
@@ -1330,22 +1316,23 @@ void JarvisBackend::tryRagPreFlight(const QString &userMessage, std::function<vo
         if (word.length() > 2 && !stopWords.contains(word))
             terms.append(word);
     }
-    if (!terms.isEmpty()) {
-        const QString searchStr = terms.join(QLatin1Char(' '));
-        const QString context = m_rag->retrieveContext(searchStr);
-        if (!context.isEmpty()) {
-            qDebug() << "[JARVIS] RAG: injecting file context for:" << searchStr;
-            setStatus(QStringLiteral("Found relevant files for: %1").arg(searchStr));
-            const QString ragMsg = QStringLiteral(
-                "[The following file contents were found on your computer. "
-                "Use them to answer the next question. "
-                "Do not try to open or read any files yourself.]\n\n%1").arg(context);
-            m_conversationHistory.push_back({QStringLiteral("user"), QJsonValue(ragMsg)});
-            m_conversationHistory.push_back({QStringLiteral("assistant"),
-                QJsonValue(QStringLiteral("I have the file contents. What would you like to know?"))});
-        }
-    }
-    onComplete();
+    if (terms.isEmpty()) return;
+
+    const QString searchStr = terms.join(QLatin1Char(' '));
+    const QString context = m_rag->retrieveContext(searchStr);
+    if (context.isEmpty()) return;
+
+    qDebug() << "[JARVIS] RAG: injecting file context for:" << searchStr;
+    setStatus(QStringLiteral("Found relevant files for: %1").arg(searchStr));
+    const QString ragMsg = QStringLiteral(
+        "[The following file contents were found on your computer. "
+        "Use them to answer the next question. "
+        "Do NOT use any ACTION blocks. Do NOT write files, open apps, or run commands. "
+        "Just answer verbally using the provided content.]\n\n%1").arg(context);
+    m_conversationHistory.push_back({QStringLiteral("user"), QJsonValue(ragMsg)});
+    m_conversationHistory.push_back({QStringLiteral("assistant"),
+        QJsonValue(QStringLiteral("I have the file contents. I'll answer verbally."))});
+    m_ragActive = true;
 }
 
 QJsonArray JarvisBackend::buildConversationContext() const
@@ -2523,6 +2510,12 @@ QString JarvisBackend::stripActionsFromResponse(const QString &responseText) con
 
 void JarvisBackend::parseAndExecuteActions(const QString &responseText)
 {
+    // Suppress actions when RAG provided file content — just answer verbally
+    if (m_ragActive) {
+        m_ragActive = false;
+        return;
+    }
+
     // Parse [ACTION:type] arg lines
     static const QRegularExpression actionRe(
         QStringLiteral("\\[ACTION:(\\w+)\\]\\s*(.*)"),

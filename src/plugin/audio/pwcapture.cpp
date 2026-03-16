@@ -115,7 +115,7 @@ bool PwCapture::setup()
         PW_KEY_MEDIA_ROLE, "Communication",
         PW_KEY_MEDIA_CLASS, "Stream/Input/Audio",
         PW_KEY_NODE_NAME, "jarvis-capture",
-        PW_KEY_APP_NAME, "Jarvis",
+        PW_KEY_APP_NAME, "J.A.R.V.I.S.",
         PW_KEY_NODE_LOOP_CLASS, "main",
         "node.async", "true",
         nullptr);
