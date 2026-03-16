@@ -20,9 +20,6 @@ public:
     /// Returns formatted context string ready for injection into the LLM prompt.
     [[nodiscard]] QString retrieveContext(const QString &query, int maxFiles = 5, int maxCharsPerFile = 2000) const;
 
-    /// Check if a user message looks like it needs document context.
-    [[nodiscard]] static bool queryNeedsRag(const QString &message);
-
 private:
     /// Extract text content from a file (plain text, markdown, PDF text, etc.)
     [[nodiscard]] static QString extractFileText(const QString &filePath, int maxChars);

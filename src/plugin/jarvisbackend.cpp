@@ -353,7 +353,7 @@ int JarvisBackend::estimatedTokens() const
         else
             total += estimateTokenCount(QJsonDocument(content.toArray()).toJson(QJsonDocument::Compact)) + 4;
     }
-    total += estimateTokenCount(buildSystemPrompt(m_currentRagContext));
+    total += estimateTokenCount(buildSystemPrompt());
     return total;
 }
 
@@ -372,7 +372,13 @@ QVariantList JarvisBackend::commandMappings() const { return m_commands->command
 // Invokable delegates
 // ─────────────────────────────────────────────
 
-void JarvisBackend::speak(const QString &text) { m_tts->speak(text); }
+void JarvisBackend::speak(const QString &text)
+{
+    m_tts->speak(text);
+    // Log all spoken text to chat so the user can see what was said
+    if (!text.isEmpty())
+        addToChatHistory(QStringLiteral("assistant"), text);
+}
 void JarvisBackend::stopSpeaking() { m_tts->stop(); }
 void JarvisBackend::toggleTtsMute() { m_tts->toggleMute(); }
 void JarvisBackend::toggleWakeWord() { m_audio->toggleWakeWord(); }
@@ -929,18 +935,21 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
     m_conversationHistory.push_back({QStringLiteral("user"), QJsonValue(userMessage)});
     trimConversationToTokenLimit();
 
-    // Check if RAG context is needed
-    m_currentRagContext.clear();
-    if (JarvisRag::queryNeedsRag(userMessage)) {
-        m_currentRagContext = m_rag->retrieveContext(userMessage);
-    }
-
     // Reset streaming state
     m_streamBuffer.clear();
     m_fullStreamedResponse.clear();
     m_spokenSoFar.clear();
     m_streamingResponse.clear();
     emit streamingResponseChanged();
+
+    // For non-tool providers, check if we need to search files first
+    m_pendingUserMessage = userMessage;
+    tryRagPreFlight(userMessage, [this]() { sendToLlmContinuation(); });
+}
+
+void JarvisBackend::sendToLlmContinuation()
+{
+    const QString userMessage = m_pendingUserMessage;
 
     // Build request based on provider
     QJsonObject requestBody;
@@ -967,7 +976,7 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
         // Build Cloud Code request format
         QJsonArray contents;
         // System instruction
-        const QString sysPrompt = buildSystemPrompt(m_currentRagContext);
+        const QString sysPrompt = buildSystemPrompt();
         QJsonObject systemInstruction{
             {QStringLiteral("role"), QStringLiteral("user")},
             {QStringLiteral("parts"), QJsonArray{QJsonObject{{QStringLiteral("text"), sysPrompt}}}},
@@ -1031,18 +1040,19 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
         }
 
         if (m_settings->isClaudeProvider()) {
-            requestBody[QStringLiteral("system")] = buildSystemPrompt(m_currentRagContext);
+            requestBody[QStringLiteral("system")] = buildSystemPrompt();
         }
 
-        // Inject MCP tools if available
+        // Inject tools — Claude and OpenAI use the native tools API,
+        // Ollama/llama.cpp use ACTION blocks in the system prompt instead.
         if (m_settings->isClaudeProvider()) {
-            const auto tools = m_mcp->allToolsForClaude();
-            if (!tools.isEmpty())
-                requestBody[QStringLiteral("tools")] = tools;
-        } else if (!m_settings->isGeminiOAuthMode()) {
-            const auto tools = m_mcp->allToolsForOpenAI();
-            if (!tools.isEmpty())
-                requestBody[QStringLiteral("tools")] = tools;
+            auto tools = builtinToolsForClaude();
+            for (const auto &t : m_mcp->allToolsForClaude()) tools.append(t);
+            requestBody[QStringLiteral("tools")] = tools;
+        } else if (m_settings->llmProvider() == QStringLiteral("openai")) {
+            auto tools = builtinToolsForOpenAI();
+            for (const auto &t : m_mcp->allToolsForOpenAI()) tools.append(t);
+            requestBody[QStringLiteral("tools")] = tools;
         }
 
         url = QUrl(m_settings->chatCompletionsUrl());
@@ -1084,17 +1094,32 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
     m_streamReply = m_networkManager->post(request, QJsonDocument(requestBody).toJson());
     connect(m_streamReply, &QNetworkReply::readyRead, this, &JarvisBackend::onLlmStreamReadyRead);
     connect(m_streamReply, &QNetworkReply::finished, this, &JarvisBackend::onLlmStreamFinished);
+
+    // Clear RAG context after it's been used in the system prompt
+    m_pendingRagContext.clear();
 }
 
-QString JarvisBackend::buildSystemPrompt(const QString &ragContext) const
+QString JarvisBackend::buildSystemPrompt() const
 {
     QString systemPrompt = m_settings->personalityPrompt().isEmpty()
         ? QString::fromUtf8(JARVIS_SYSTEM_PROMPT) : m_settings->personalityPrompt();
 
-    // Inject RAG context if provided
-    if (!ragContext.isEmpty()) {
-        systemPrompt += QStringLiteral("\n\n") + ragContext;
+    if (!m_pendingRagContext.isEmpty()) {
+        // When file search results are available, remove ACTION instructions
+        // to prevent the model from trying to open/cat files itself
+        static const QRegularExpression actionSection(
+            QStringLiteral("SYSTEM INTERACTION CAPABILITIES:[\\s\\S]*?(?=\\n\\n[A-Z]|$)"));
+        systemPrompt.remove(actionSection);
+
+        systemPrompt += QStringLiteral(
+            "\n\nIMPORTANT: The following file contents were retrieved from the user's computer. "
+            "Use ONLY this information to answer. Do NOT use any ACTION blocks. "
+            "Do NOT try to open, read, or cat any files. The content is already here:\n\n");
+        systemPrompt += m_pendingRagContext;
+        systemPrompt += QStringLiteral(
+            "\n\nCite the file path when referencing specific information.\n");
     }
+
     systemPrompt += QStringLiteral("\n\nCurrent system status:\n");
     systemPrompt += QStringLiteral("- CPU Usage: %1%\n").arg(m_system->cpuUsage(), 0, 'f', 1);
     systemPrompt += QStringLiteral("- Memory: %1 / %2 GB (%3%)\n")
@@ -1112,6 +1137,138 @@ QString JarvisBackend::buildSystemPrompt(const QString &ragContext) const
     return systemPrompt;
 }
 
+QJsonArray JarvisBackend::builtinToolsForClaude() const
+{
+    return QJsonArray{QJsonObject{
+        {QStringLiteral("name"), QStringLiteral("file_search")},
+        {QStringLiteral("description"), QStringLiteral(
+            "Search local files on the user's computer using the KDE Baloo file indexer. "
+            "Use this when the user asks about their files, documents, notes, code, configs, "
+            "or any local content. Returns relevant text excerpts with file paths.")},
+        {QStringLiteral("input_schema"), QJsonObject{
+            {QStringLiteral("type"), QStringLiteral("object")},
+            {QStringLiteral("properties"), QJsonObject{
+                {QStringLiteral("query"), QJsonObject{
+                    {QStringLiteral("type"), QStringLiteral("string")},
+                    {QStringLiteral("description"), QStringLiteral("Search terms to find relevant files")},
+                }},
+                {QStringLiteral("max_files"), QJsonObject{
+                    {QStringLiteral("type"), QStringLiteral("integer")},
+                    {QStringLiteral("description"), QStringLiteral("Maximum files to return (default 5)")},
+                }},
+            }},
+            {QStringLiteral("required"), QJsonArray{QStringLiteral("query")}},
+        }},
+    }};
+}
+
+QJsonArray JarvisBackend::builtinToolsForOpenAI() const
+{
+    return QJsonArray{QJsonObject{
+        {QStringLiteral("type"), QStringLiteral("function")},
+        {QStringLiteral("function"), QJsonObject{
+            {QStringLiteral("name"), QStringLiteral("file_search")},
+            {QStringLiteral("description"), QStringLiteral(
+                "Search local files on the user's computer using the KDE Baloo file indexer. "
+                "Use this when the user asks about their files, documents, notes, code, configs, "
+                "or any local content. Returns relevant text excerpts with file paths.")},
+            {QStringLiteral("parameters"), QJsonObject{
+                {QStringLiteral("type"), QStringLiteral("object")},
+                {QStringLiteral("properties"), QJsonObject{
+                    {QStringLiteral("query"), QJsonObject{
+                        {QStringLiteral("type"), QStringLiteral("string")},
+                        {QStringLiteral("description"), QStringLiteral("Search terms to find relevant files")},
+                    }},
+                    {QStringLiteral("max_files"), QJsonObject{
+                        {QStringLiteral("type"), QStringLiteral("integer")},
+                        {QStringLiteral("description"), QStringLiteral("Maximum files to return (default 5)")},
+                    }},
+                }},
+                {QStringLiteral("required"), QJsonArray{QStringLiteral("query")}},
+            }},
+        }},
+    }};
+}
+
+bool JarvisBackend::dispatchToolCall(const QString &name, const QJsonObject &args,
+                                      std::function<void(QJsonArray, bool)> callback)
+{
+    if (name != QStringLiteral("file_search"))
+        return false;
+
+    const QString query = args[QStringLiteral("query")].toString();
+    const int maxFiles = args[QStringLiteral("max_files")].toInt(5);
+
+    qDebug() << "[JARVIS] file_search tool called with query:" << query;
+    const QString result = m_rag->retrieveContext(query, maxFiles);
+
+    QJsonArray content{QJsonObject{
+        {QStringLiteral("type"), QStringLiteral("text")},
+        {QStringLiteral("text"), result.isEmpty()
+            ? QStringLiteral("No matching files found for: %1").arg(query) : result},
+    }};
+    callback(content, false);
+    return true;
+}
+
+void JarvisBackend::tryRagPreFlight(const QString &userMessage, std::function<void()> onComplete)
+{
+    m_pendingRagContext.clear();
+
+    // For providers with native tool support, skip — file_search tool handles it
+    if (m_settings->isClaudeProvider() || m_settings->llmProvider() == QStringLiteral("openai")) {
+        onComplete();
+        return;
+    }
+
+    // For Ollama/llama.cpp: detect file-related queries and search Baloo directly.
+    // No LLM pre-flight — just keyword detection + Baloo search.
+    const QString lower = userMessage.toLower();
+    static const QStringList fileIndicators = {
+        QStringLiteral("file"), QStringLiteral("document"), QStringLiteral("readme"),
+        QStringLiteral("config"), QStringLiteral("log"), QStringLiteral("notes"),
+        QStringLiteral("what does"), QStringLiteral("what's in"), QStringLiteral("whats in"),
+        QStringLiteral("summarize"), QStringLiteral("summarise"), QStringLiteral("summary"),
+        QStringLiteral("contents of"), QStringLiteral("look up"), QStringLiteral("search for"),
+        QStringLiteral("find in"), QStringLiteral("read the"), QStringLiteral("show me"),
+    };
+    static const QRegularExpression pathRe(QStringLiteral("(~/|/home/|\\.[a-z]{1,4}\\b)"));
+
+    bool needsRag = pathRe.match(lower).hasMatch();
+    if (!needsRag) {
+        for (const auto &ind : fileIndicators) {
+            if (lower.contains(ind)) { needsRag = true; break; }
+        }
+    }
+
+    if (needsRag) {
+        // Extract meaningful words as search terms (skip stop words)
+        static const QStringList stopWords = {
+            QStringLiteral("the"), QStringLiteral("a"), QStringLiteral("an"), QStringLiteral("is"),
+            QStringLiteral("are"), QStringLiteral("was"), QStringLiteral("what"), QStringLiteral("how"),
+            QStringLiteral("does"), QStringLiteral("do"), QStringLiteral("in"), QStringLiteral("of"),
+            QStringLiteral("to"), QStringLiteral("for"), QStringLiteral("my"), QStringLiteral("me"),
+            QStringLiteral("about"), QStringLiteral("from"), QStringLiteral("that"), QStringLiteral("this"),
+            QStringLiteral("file"), QStringLiteral("document"), QStringLiteral("find"),
+            QStringLiteral("search"), QStringLiteral("look"), QStringLiteral("read"),
+            QStringLiteral("tell"), QStringLiteral("show"), QStringLiteral("give"),
+            QStringLiteral("please"), QStringLiteral("can"), QStringLiteral("you"),
+            QStringLiteral("summarize"), QStringLiteral("summarise"), QStringLiteral("summary"),
+        };
+        QStringList terms;
+        for (const auto &word : lower.split(QRegularExpression(QStringLiteral("\\W+")), Qt::SkipEmptyParts)) {
+            if (word.length() > 2 && !stopWords.contains(word))
+                terms.append(word);
+        }
+        if (!terms.isEmpty()) {
+            const QString searchStr = terms.join(QLatin1Char(' '));
+            qDebug() << "[JARVIS] RAG pre-flight (keyword):" << searchStr;
+            m_pendingRagContext = m_rag->retrieveContext(searchStr);
+        }
+    }
+    onComplete();
+}
+
 QJsonArray JarvisBackend::buildConversationContext() const
 {
     QJsonArray messages;
@@ -1120,7 +1277,7 @@ QJsonArray JarvisBackend::buildConversationContext() const
     if (!m_settings->isClaudeProvider()) {
         QJsonObject systemMsg;
         systemMsg[QStringLiteral("role")] = QStringLiteral("system");
-        systemMsg[QStringLiteral("content")] = buildSystemPrompt(m_currentRagContext);
+        systemMsg[QStringLiteral("content")] = buildSystemPrompt();
         messages.append(systemMsg);
     }
 
@@ -1408,14 +1565,14 @@ void JarvisBackend::continueAfterToolCall()
     }
 
     if (m_settings->isClaudeProvider()) {
-        requestBody[QStringLiteral("system")] = buildSystemPrompt(m_currentRagContext);
-        const auto tools = m_mcp->allToolsForClaude();
-        if (!tools.isEmpty())
-            requestBody[QStringLiteral("tools")] = tools;
-    } else {
-        const auto tools = m_mcp->allToolsForOpenAI();
-        if (!tools.isEmpty())
-            requestBody[QStringLiteral("tools")] = tools;
+        requestBody[QStringLiteral("system")] = buildSystemPrompt();
+        auto tools = builtinToolsForClaude();
+        for (const auto &t : m_mcp->allToolsForClaude()) tools.append(t);
+        requestBody[QStringLiteral("tools")] = tools;
+    } else if (m_settings->llmProvider() == QStringLiteral("openai")) {
+        auto tools = builtinToolsForOpenAI();
+        for (const auto &t : m_mcp->allToolsForOpenAI()) tools.append(t);
+        requestBody[QStringLiteral("tools")] = tools;
     }
 
     url = QUrl(m_settings->chatCompletionsUrl());
@@ -1499,7 +1656,7 @@ void JarvisBackend::continueAfterToolCall()
                     qDebug() << "[JARVIS] Claude tool_use:" << toolName << "id:" << toolId;
                     setStatus(QStringLiteral("Calling tool: %1").arg(toolName));
 
-                    m_mcp->callTool(toolName, toolInput, [this, toolId, toolName, remaining, resultBlocks](QJsonArray content, bool isError) {
+                    auto toolCallback = [this, toolId, toolName, remaining, resultBlocks](QJsonArray content, bool isError) {
                         qDebug() << "[JARVIS] Tool result for" << toolName << "error:" << isError;
 
                         // Build tool_result block
@@ -1525,7 +1682,9 @@ void JarvisBackend::continueAfterToolCall()
                             delete resultBlocks;
                             continueAfterToolCall();
                         }
-                    });
+                    };
+                    if (!dispatchToolCall(toolName, toolInput, toolCallback))
+                        m_mcp->callTool(toolName, toolInput, toolCallback);
                 }
                 return;
             }
@@ -1592,7 +1751,7 @@ void JarvisBackend::continueAfterToolCall()
                 qDebug() << "[JARVIS] OpenAI tool_call:" << toolName << "id:" << callId;
                 setStatus(QStringLiteral("Calling tool: %1").arg(toolName));
 
-                m_mcp->callTool(toolName, toolArgs, [this, callId, toolName, remaining](QJsonArray content, bool isError) {
+                auto openaiCallback = [this, callId, toolName, remaining](QJsonArray content, bool isError) {
                     qDebug() << "[JARVIS] Tool result for" << toolName << "error:" << isError;
 
                     // Build tool result message for OpenAI format
@@ -1615,7 +1774,9 @@ void JarvisBackend::continueAfterToolCall()
                         delete remaining;
                         continueAfterToolCall();
                     }
-                });
+                };
+                if (!dispatchToolCall(toolName, toolArgs, openaiCallback))
+                    m_mcp->callTool(toolName, toolArgs, openaiCallback);
             }
             return;
         }
@@ -1939,7 +2100,7 @@ void JarvisBackend::handleScreenContext(const QString &question)
                     {QStringLiteral("content"), content},
                 },
             };
-            requestBody[QStringLiteral("system")] = buildSystemPrompt(m_currentRagContext);
+            requestBody[QStringLiteral("system")] = buildSystemPrompt();
             requestBody[QStringLiteral("max_tokens")] = 1024;
             requestBody[QStringLiteral("stream")] = false;
 
@@ -2036,7 +2197,7 @@ void JarvisBackend::handleScreenContext(const QString &question)
             m_lastResponse = text;
             emit lastResponseChanged();
             addToChatHistory(QStringLiteral("user"), QStringLiteral("[screenshot]"));
-            addToChatHistory(QStringLiteral("assistant"), text);
+            // speak() adds to chat history automatically
             speak(text);
             setStatus("Ready.");
 
@@ -2152,7 +2313,7 @@ void JarvisBackend::addToChatHistory(const QString &role, const QString &message
 void JarvisBackend::trimConversationToTokenLimit()
 {
     const int limit = m_settings->contextTokenLimit();
-    const int systemTokens = estimateTokenCount(buildSystemPrompt(m_currentRagContext));
+    const int systemTokens = estimateTokenCount(buildSystemPrompt());
     // Reserve 20% for the response
     const int available = static_cast<int>(limit * 0.8) - systemTokens;
 

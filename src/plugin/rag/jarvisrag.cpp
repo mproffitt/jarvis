@@ -15,32 +15,6 @@ JarvisRag::JarvisRag(JarvisSettings *settings, QObject *parent)
 {
 }
 
-bool JarvisRag::queryNeedsRag(const QString &message)
-{
-    const QString lower = message.toLower();
-
-    // Explicit file/document references
-    static const QStringList ragIndicators = {
-        QStringLiteral("file"), QStringLiteral("document"), QStringLiteral("notes"),
-        QStringLiteral("readme"), QStringLiteral("config"), QStringLiteral("log"),
-        QStringLiteral("what does"), QStringLiteral("what's in"),
-        QStringLiteral("find in"), QStringLiteral("search for"),
-        QStringLiteral("look up"), QStringLiteral("look in"),
-        QStringLiteral("according to"), QStringLiteral("based on"),
-        QStringLiteral("read"), QStringLiteral("contents of"),
-        QStringLiteral("summarize"), QStringLiteral("summarise"),
-    };
-
-    for (const auto &indicator : ragIndicators) {
-        if (lower.contains(indicator)) return true;
-    }
-
-    // File path patterns
-    static const QRegularExpression pathRe(QStringLiteral("(~/|/home/|\\.[a-z]{1,4}\\b)"));
-    if (pathRe.match(lower).hasMatch()) return true;
-
-    return false;
-}
 
 QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCharsPerFile) const
 {
@@ -129,9 +103,7 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
     }
 
     qDebug() << "[JARVIS] RAG: found" << fileCount << "relevant files";
-    return QStringLiteral("REFERENCE DOCUMENTS (from local files):\n%1\n"
-        "Use the above documents to answer the user's question. "
-        "Cite the file path when referencing specific information.\n").arg(context);
+    return context.trimmed();
 }
 
 QString JarvisRag::extractFileText(const QString &filePath, int maxChars)

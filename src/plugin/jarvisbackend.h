@@ -325,11 +325,17 @@ private slots:
 
 private:
     void sendToLlm(const QString &userMessage);
+    void sendToLlmContinuation();
     void setStatus(const QString &status);
     void appendWhisperLog(const QString &source, const QString &text);
     void addToChatHistory(const QString &role, const QString &message);
     QJsonArray buildConversationContext() const;
-    QString buildSystemPrompt(const QString &ragContext = {}) const;
+    QString buildSystemPrompt() const;
+    QJsonArray builtinToolsForClaude() const;
+    QJsonArray builtinToolsForOpenAI() const;
+    bool dispatchToolCall(const QString &name, const QJsonObject &args,
+                          std::function<void(QJsonArray, bool)> callback);
+    void tryRagPreFlight(const QString &userMessage, std::function<void()> onComplete);
     QString extractStreamToken(const QString &jsonStr) const;
     void connectModuleSignals();
     void trySpeakCompleteSentences();
@@ -424,9 +430,10 @@ private:
     QNetworkReply *m_streamReply{nullptr};
     QString m_streamBuffer;
     QString m_fullStreamedResponse;
+    QString m_pendingRagContext;  // RAG results for non-tool providers
+    QString m_pendingUserMessage; // Stored for sendToLlmContinuation
     QString m_spokenSoFar;
     QString m_pendingOAuthMessage;
-    QString m_currentRagContext;
     int m_toolCallLoopCount{0};
 
     // Continuous conversation
