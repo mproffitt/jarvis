@@ -532,19 +532,23 @@ Item {
                 font.pointSize: Kirigami.Theme.smallFont.pointSize
             }
 
-            RowLayout {
+            TextField {
+                id: hfSearchField
                 Kirigami.FormData.label: i18n("Search:")
-                spacing: Kirigami.Units.smallSpacing
-                TextField {
-                    id: hfSearchField
-                    placeholderText: i18n("Search GGUF models...")
-                    Layout.fillWidth: true
-                    implicitWidth: Kirigami.Units.gridUnit * 12
-                    onAccepted: JarvisBackend.searchModels(text)
-                }
-                Button {
-                    icon.name: "search"
-                    onClicked: JarvisBackend.searchModels(hfSearchField.text)
+                placeholderText: i18n("Search GGUF models...")
+                Layout.fillWidth: true
+                implicitWidth: Kirigami.Units.gridUnit * 12
+                onTextChanged: hfSearchTimer.restart()
+                Keys.onReturnPressed: function(event) { hfSearchTimer.stop(); JarvisBackend.searchModels(text); event.accepted = true }
+                Keys.onEnterPressed: function(event) { hfSearchTimer.stop(); JarvisBackend.searchModels(text); event.accepted = true }
+
+                Timer {
+                    id: hfSearchTimer
+                    interval: 500
+                    onTriggered: {
+                        if (hfSearchField.text.length >= 2)
+                            JarvisBackend.searchModels(hfSearchField.text)
+                    }
                 }
             }
 
@@ -554,52 +558,123 @@ Item {
             model: (JarvisBackend.llmProvider === "ollama" || JarvisBackend.llmProvider === "llamacpp")
                    ? JarvisBackend.hfSearchResults : []
             delegate: Kirigami.AbstractCard {
+                id: modelCard
                 Layout.fillWidth: true
                 Layout.leftMargin: Kirigami.Units.smallSpacing
                 Layout.rightMargin: Kirigami.Units.smallSpacing
-                contentItem: RowLayout {
-                    spacing: Kirigami.Units.largeSpacing
-                    ColumnLayout {
+
+                property bool expanded: false
+                property bool detailsLoaded: false
+
+                contentItem: ColumnLayout {
+                    spacing: Kirigami.Units.smallSpacing
+
+                    // Header row — always visible
+                    RowLayout {
+                        spacing: Kirigami.Units.largeSpacing
                         Layout.fillWidth: true
-                        spacing: 2
-                        RowLayout {
-                            spacing: Kirigami.Units.smallSpacing
-                            Label {
-                                text: modelData.name
-                                font.bold: true
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+                            RowLayout {
+                                spacing: Kirigami.Units.smallSpacing
+                                Label {
+                                    text: modelData.name
+                                    font.bold: true
+                                }
+                                Label {
+                                    text: modelData.downloads ? (modelData.downloads + " downloads") : ""
+                                    visible: modelData.downloads && modelData.downloads.length > 0
+                                    color: Kirigami.Theme.disabledTextColor
+                                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+                                }
                             }
                             Label {
-                                text: modelData.size ? modelData.size : ""
-                                visible: modelData.size && modelData.size.length > 0
+                                text: modelData.desc
                                 color: Kirigami.Theme.disabledTextColor
                                 font.pointSize: Kirigami.Theme.smallFont.pointSize
-                            }
-                            Label {
-                                text: modelData.downloads ? ("  " + modelData.downloads + " downloads") : ""
-                                visible: modelData.downloads && modelData.downloads.length > 0
-                                color: Kirigami.Theme.disabledTextColor
-                                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                                Layout.fillWidth: true
+                                wrapMode: Text.Wrap
                             }
                         }
-                        Label {
-                            text: modelData.desc
-                            color: Kirigami.Theme.disabledTextColor
-                            font.pointSize: Kirigami.Theme.smallFont.pointSize
-                            Layout.fillWidth: true
-                            wrapMode: Text.Wrap
+                        Button {
+                            text: modelCard.expanded ? "▲" : "▼"
+                            flat: true
+                            implicitWidth: Kirigami.Units.gridUnit * 2
+                            onClicked: {
+                                modelCard.expanded = !modelCard.expanded
+                                if (modelCard.expanded && !modelCard.detailsLoaded) {
+                                    JarvisBackend.fetchModelDetails(modelData.id)
+                                    modelCard.detailsLoaded = true
+                                }
+                            }
+                        }
+                        Button {
+                            text: JarvisBackend.llmProvider === "ollama" ? i18n("Pull") : i18n("Download")
+                            icon.name: "download"
+                            enabled: !JarvisBackend.downloading
+                            onClicked: {
+                                if (JarvisBackend.llmProvider === "ollama") {
+                                    var file = modelData.file ? modelData.file : ""
+                                    var tag = file ? ":" + file : ""
+                                    JarvisBackend.pullOllamaModel("hf.co/" + modelData.id + tag)
+                                } else {
+                                    JarvisBackend.downloadLlmModel(modelData.id)
+                                }
+                            }
                         }
                     }
-                    Button {
-                        text: JarvisBackend.llmProvider === "ollama" ? i18n("Pull") : i18n("Download")
-                        icon.name: "download"
-                        enabled: !JarvisBackend.downloading
-                        onClicked: {
-                            if (JarvisBackend.llmProvider === "ollama") {
-                                JarvisBackend.pullOllamaModel("hf.co/" + modelData.id)
-                            } else {
-                                JarvisBackend.downloadLlmModel(modelData.id)
+
+                    // Expanded details — shown on click
+                    GridLayout {
+                        visible: modelCard.expanded && JarvisBackend.modelDetails.id === modelData.id
+                        Layout.fillWidth: true
+                        columns: 2
+                        columnSpacing: Kirigami.Units.largeSpacing
+                        rowSpacing: 2
+
+                        Label { text: i18n("File size:"); font.bold: true; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+                        Label {
+                            font.pointSize: Kirigami.Theme.smallFont.pointSize; Layout.fillWidth: true
+                            text: {
+                                var sizes = JarvisBackend.modelDetails.fileSizes
+                                var file = modelData.file || ""
+                                if (sizes && file && sizes[file]) return sizes[file]
+                                return "loading..."
                             }
                         }
+
+                        Label { text: i18n("Parameters:"); font.bold: true; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+                        Label { text: JarvisBackend.modelDetails.params || "—"; font.pointSize: Kirigami.Theme.smallFont.pointSize; Layout.fillWidth: true }
+
+                        Label { text: i18n("Architecture:"); font.bold: true; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+                        Label { text: JarvisBackend.modelDetails.architecture || "—"; font.pointSize: Kirigami.Theme.smallFont.pointSize; Layout.fillWidth: true }
+
+                        Label { text: i18n("Context:"); font.bold: true; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+                        Label { text: JarvisBackend.modelDetails.contextLength ? JarvisBackend.modelDetails.contextLength.toLocaleString() + " tokens" : "—"; font.pointSize: Kirigami.Theme.smallFont.pointSize; Layout.fillWidth: true }
+
+                        Label { text: i18n("License:"); font.bold: true; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+                        Label { text: JarvisBackend.modelDetails.license || "—"; font.pointSize: Kirigami.Theme.smallFont.pointSize; Layout.fillWidth: true }
+
+                        Label { text: i18n("Author:"); font.bold: true; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+                        Label { text: JarvisBackend.modelDetails.author || "—"; font.pointSize: Kirigami.Theme.smallFont.pointSize; Layout.fillWidth: true }
+
+                        Label { text: i18n("Base model:"); font.bold: true; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+                        Label { text: JarvisBackend.modelDetails.baseModel || "—"; font.pointSize: Kirigami.Theme.smallFont.pointSize; Layout.fillWidth: true; wrapMode: Text.Wrap }
+
+                        Label { text: i18n("Tags:"); font.bold: true; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+                        Label { text: JarvisBackend.modelDetails.tags || "—"; font.pointSize: Kirigami.Theme.smallFont.pointSize; Layout.fillWidth: true; wrapMode: Text.Wrap }
+
+                        Label { text: i18n("Likes:"); font.bold: true; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+                        Label { text: JarvisBackend.modelDetails.likes ? JarvisBackend.modelDetails.likes.toString() : "—"; font.pointSize: Kirigami.Theme.smallFont.pointSize; Layout.fillWidth: true }
+                    }
+
+                    // HuggingFace link
+                    Label {
+                        visible: modelCard.expanded && JarvisBackend.modelDetails.id === modelData.id
+                        text: "<a href=\"" + (JarvisBackend.modelDetails.url || "") + "\">View on HuggingFace</a>"
+                        font.pointSize: Kirigami.Theme.smallFont.pointSize
+                        onLinkActivated: function(link) { Qt.openUrlExternally(link) }
                     }
                 }
             }

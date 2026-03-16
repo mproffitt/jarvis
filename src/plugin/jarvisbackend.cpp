@@ -241,6 +241,7 @@ void JarvisBackend::connectModuleSignals()
     connect(m_settings, &JarvisSettings::downloadStatusChanged, this, &JarvisBackend::downloadStatusChanged);
     connect(m_settings, &JarvisSettings::availableLlmModelsChanged, this, &JarvisBackend::availableLlmModelsChanged);
     connect(m_settings, &JarvisSettings::hfSearchResultsChanged, this, &JarvisBackend::hfSearchResultsChanged);
+    connect(m_settings, &JarvisSettings::modelDetailsChanged, this, &JarvisBackend::modelDetailsChanged);
     connect(m_settings, &JarvisSettings::availableTtsVoicesChanged, this, &JarvisBackend::availableTtsVoicesChanged);
     connect(m_settings, &JarvisSettings::maxHistoryPairsChanged, this, &JarvisBackend::maxHistoryPairsChanged);
     connect(m_settings, &JarvisSettings::wakeBufferSecondsChanged, this, [this]() {
@@ -394,10 +395,16 @@ void JarvisBackend::refreshOllamaModels()
 }
 
 QVariantList JarvisBackend::hfSearchResults() const { return m_settings->hfSearchResults(); }
+QVariantMap JarvisBackend::modelDetails() const { return m_settings->modelDetails(); }
 
 void JarvisBackend::searchModels(const QString &query)
 {
     m_settings->searchHuggingFaceModels(query);
+}
+
+void JarvisBackend::fetchModelDetails(const QString &modelId)
+{
+    m_settings->fetchModelDetails(modelId);
 }
 
 void JarvisBackend::pullOllamaModel(const QString &modelName)

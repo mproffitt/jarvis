@@ -791,11 +791,13 @@ void JarvisSettings::searchHuggingFaceModels(const QString &query)
         ? QStringLiteral("gguf instruct")
         : QStringLiteral("gguf %1").arg(query);
 
-    const QString searchUrl = QStringLiteral(
+    const QString encodedQuery = QString(searchQuery).replace(QLatin1Char(' '), QLatin1Char('+'));
+    const QByteArray searchUrlBytes = QStringLiteral(
         "https://huggingface.co/api/models?search=%1&sort=downloads&direction=-1&limit=20"
-    ).arg(QString::fromUtf8(QUrl::toPercentEncoding(searchQuery)));
+        "&expand[]=siblings&expand[]=downloads&expand[]=tags&expand[]=pipeline_tag"
+    ).arg(encodedQuery).toUtf8();
 
-    QNetworkRequest request{QUrl(searchUrl)};
+    QNetworkRequest request{QUrl::fromEncoded(searchUrlBytes)};
     request.setTransferTimeout(15000);
 
     auto *reply = m_networkManager->get(request);
@@ -816,7 +818,9 @@ void JarvisSettings::searchHuggingFaceModels(const QString &query)
         m_hfSearchResults.clear();
         for (const auto &val : models) {
             const QJsonObject obj = val.toObject();
-            const QString modelId = obj[QStringLiteral("modelId")].toString();
+            QString modelId = obj[QStringLiteral("modelId")].toString();
+            if (modelId.isEmpty())
+                modelId = obj[QStringLiteral("id")].toString();
 
             // Skip if already installed (check repo name against installed model names)
             const QString repoName = modelId.section('/', -1).toLower();
@@ -832,6 +836,17 @@ void JarvisSettings::searchHuggingFaceModels(const QString &query)
             const qint64 downloads = obj[QStringLiteral("downloads")].toVariant().toLongLong();
             const QString pipelineTag = obj[QStringLiteral("pipeline_tag")].toString();
 
+            // Extract useful info from tags
+            QString license;
+            QStringList languages;
+            for (const auto &t : obj[QStringLiteral("tags")].toArray()) {
+                const QString tag = t.toString();
+                if (tag.startsWith(QStringLiteral("license:")))
+                    license = tag.mid(8);
+                else if (tag.length() == 2 && tag[0].isLower() && tag[1].isLower())
+                    languages.append(tag); // 2-letter language codes
+            }
+
             // Format download count
             QString dlStr;
             if (downloads >= 1000000)
@@ -841,52 +856,147 @@ void JarvisSettings::searchHuggingFaceModels(const QString &query)
             else
                 dlStr = QString::number(downloads);
 
-            // Try to find a .gguf file size from siblings
-            QString sizeStr;
+            // Build a friendly base name from modelId
+            QString baseName = modelId.section('/', -1);
+            baseName.remove(QStringLiteral("-GGUF"), Qt::CaseInsensitive);
+            baseName.remove(QStringLiteral("_GGUF"), Qt::CaseInsensitive);
+            baseName.replace('-', ' ');
+            baseName.replace('_', ' ');
+
+            // Create one card per quantization (group split GGUF shards)
             const QJsonArray siblings = obj[QStringLiteral("siblings")].toArray();
+            // Match quant tag before .gguf or before -00001-of-NNNNN.gguf
+            static const QRegularExpression quantRe(
+                QStringLiteral("[._-]((?:I?Q[0-9]+(?:_[A-Z0-9]+)*|[Ff]16|[Ff]32))(?:-\\d{5}-of-\\d{5})?\\.gguf$"),
+                QRegularExpression::CaseInsensitiveOption);
+            QMap<QString, QString> quantToFile; // quant -> first filename
             for (const auto &sib : siblings) {
-                const QJsonObject sibObj = sib.toObject();
-                const QString fname = sibObj[QStringLiteral("rfilename")].toString();
-                if (fname.endsWith(QStringLiteral(".gguf")) && fname.contains(QStringLiteral("Q4_K_M"))) {
-                    const qint64 size = sibObj[QStringLiteral("size")].toVariant().toLongLong();
-                    if (size > 0) {
-                        sizeStr = QStringLiteral("%1 GB").arg(size / 1073741824.0, 0, 'f', 1);
-                    }
-                    break;
-                }
-            }
-            // Fallback: find any .gguf file
-            if (sizeStr.isEmpty()) {
-                for (const auto &sib : siblings) {
-                    const QJsonObject sibObj = sib.toObject();
-                    const QString fname = sibObj[QStringLiteral("rfilename")].toString();
-                    if (fname.endsWith(QStringLiteral(".gguf"))) {
-                        const qint64 size = sibObj[QStringLiteral("size")].toVariant().toLongLong();
-                        if (size > 0) {
-                            sizeStr = QStringLiteral("%1 GB").arg(size / 1073741824.0, 0, 'f', 1);
-                        }
-                        break;
-                    }
-                }
+                const QString fname = sib.toObject()[QStringLiteral("rfilename")].toString();
+                if (!fname.endsWith(QStringLiteral(".gguf"))) continue;
+
+                const auto qm = quantRe.match(fname);
+                const QString quant = qm.hasMatch() ? qm.captured(1).toUpper() : QStringLiteral("default");
+                if (!quantToFile.contains(quant))
+                    quantToFile[quant] = fname;
             }
 
-            // Build a friendly name from modelId (e.g. "bartowski/Llama-3.2-3B-Instruct-GGUF" -> "Llama 3.2 3B Instruct")
-            QString friendlyName = modelId.section('/', -1); // take part after last /
-            friendlyName.remove(QStringLiteral("-GGUF"), Qt::CaseInsensitive);
-            friendlyName.remove(QStringLiteral("_GGUF"), Qt::CaseInsensitive);
-            friendlyName.replace('-', ' ');
-            friendlyName.replace('_', ' ');
-
-            m_hfSearchResults.append(QVariantMap{
+            // Common fields for all cards from this repo
+            const QVariantMap common = {
                 {QStringLiteral("id"), modelId},
-                {QStringLiteral("name"), friendlyName},
-                {QStringLiteral("size"), sizeStr},
                 {QStringLiteral("downloads"), dlStr},
+                {QStringLiteral("license"), license},
+                {QStringLiteral("languages"), languages.join(QStringLiteral(", "))},
                 {QStringLiteral("desc"), pipelineTag.isEmpty() ? QStringLiteral("GGUF model") : pipelineTag},
-            });
+            };
+
+            if (quantToFile.isEmpty()) {
+                QVariantMap entry = common;
+                entry[QStringLiteral("name")] = baseName;
+                m_hfSearchResults.append(entry);
+            } else {
+                for (auto it = quantToFile.constBegin(); it != quantToFile.constEnd(); ++it) {
+                    const QString &quant = it.key();
+                    QVariantMap entry = common;
+                    entry[QStringLiteral("name")] = quant == QStringLiteral("default")
+                        ? baseName : QStringLiteral("%1 (%2)").arg(baseName, quant);
+                    entry[QStringLiteral("file")] = it.value();
+                    m_hfSearchResults.append(entry);
+                }
+            }
         }
 
         emit hfSearchResultsChanged();
+    });
+}
+
+void JarvisSettings::fetchModelDetails(const QString &modelId)
+{
+    const QByteArray url = QStringLiteral("https://huggingface.co/api/models/%1").arg(modelId).toUtf8();
+    QNetworkRequest request{QUrl::fromEncoded(url)};
+    request.setTransferTimeout(10000);
+
+    auto *reply = m_networkManager->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, modelId]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) return;
+
+        const auto doc = QJsonDocument::fromJson(reply->readAll());
+        const auto obj = doc.object();
+        const auto cardData = obj[QStringLiteral("cardData")].toObject();
+        const auto gguf = obj[QStringLiteral("gguf")].toObject();
+
+        // Parameter count
+        const qint64 totalParams = gguf[QStringLiteral("total")].toVariant().toLongLong();
+        QString paramStr;
+        if (totalParams >= 1000000000)
+            paramStr = QStringLiteral("%1B").arg(totalParams / 1000000000.0, 0, 'f', 1);
+        else if (totalParams > 0)
+            paramStr = QStringLiteral("%1M").arg(totalParams / 1000000.0, 0, 'f', 0);
+
+        // License
+        QString license = cardData[QStringLiteral("license")].toString();
+        if (license.isEmpty()) {
+            for (const auto &t : obj[QStringLiteral("tags")].toArray()) {
+                const QString tag = t.toString();
+                if (tag.startsWith(QStringLiteral("license:"))) {
+                    license = tag.mid(8);
+                    break;
+                }
+            }
+        }
+
+        // Tags — filter to useful ones
+        QStringList tags;
+        for (const auto &t : obj[QStringLiteral("tags")].toArray()) {
+            const QString tag = t.toString();
+            if (tag == QStringLiteral("gguf") || tag == QStringLiteral("transformers")
+                || tag.startsWith(QStringLiteral("license:"))
+                || tag.startsWith(QStringLiteral("base_model:"))
+                || tag.startsWith(QStringLiteral("region:")))
+                continue;
+            // Keep language codes, architecture names, task types
+            tags.append(tag);
+        }
+
+        m_modelDetails = QVariantMap{
+            {QStringLiteral("id"), modelId},
+            {QStringLiteral("params"), paramStr},
+            {QStringLiteral("architecture"), gguf[QStringLiteral("architecture")].toString()},
+            {QStringLiteral("contextLength"), gguf[QStringLiteral("context_length")].toVariant().toLongLong()},
+            {QStringLiteral("license"), license},
+            {QStringLiteral("author"), obj[QStringLiteral("author")].toString()},
+            {QStringLiteral("baseModel"), cardData[QStringLiteral("base_model")].toString()},
+            {QStringLiteral("likes"), obj[QStringLiteral("likes")].toVariant().toLongLong()},
+            {QStringLiteral("tags"), tags.join(QStringLiteral(", "))},
+            {QStringLiteral("url"), QStringLiteral("https://huggingface.co/%1").arg(modelId)},
+        };
+        emit modelDetailsChanged();
+
+        // Fetch file sizes from tree API
+        const QByteArray treeUrl = QStringLiteral(
+            "https://huggingface.co/api/models/%1/tree/main").arg(modelId).toUtf8();
+        QNetworkRequest treeReq{QUrl::fromEncoded(treeUrl)};
+        treeReq.setTransferTimeout(10000);
+        auto *treeReply = m_networkManager->get(treeReq);
+        connect(treeReply, &QNetworkReply::finished, this, [this, treeReply, modelId]() {
+            treeReply->deleteLater();
+            if (treeReply->error() != QNetworkReply::NoError) return;
+            if (m_modelDetails[QStringLiteral("id")].toString() != modelId) return;
+
+            const auto treeArr = QJsonDocument::fromJson(treeReply->readAll()).array();
+            QVariantMap fileSizes;
+            for (const auto &f : treeArr) {
+                const auto fObj = f.toObject();
+                const QString path = fObj[QStringLiteral("path")].toString();
+                if (!path.endsWith(QStringLiteral(".gguf"))) continue;
+                const qint64 size = fObj[QStringLiteral("size")].toVariant().toLongLong();
+                if (size > 0) {
+                    fileSizes[path] = QStringLiteral("%1 GB").arg(size / 1073741824.0, 0, 'f', 1);
+                }
+            }
+            m_modelDetails[QStringLiteral("fileSizes")] = fileSizes;
+            emit modelDetailsChanged();
+        });
     });
 }
 

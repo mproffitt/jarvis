@@ -77,6 +77,7 @@ class JarvisBackend : public QObject
     Q_PROPERTY(QString currentVoiceName READ currentVoiceName NOTIFY currentVoiceNameChanged)
     Q_PROPERTY(QVariantList availableLlmModels READ availableLlmModels NOTIFY availableLlmModelsChanged)
     Q_PROPERTY(QVariantList hfSearchResults READ hfSearchResults NOTIFY hfSearchResultsChanged)
+    Q_PROPERTY(QVariantMap modelDetails READ modelDetails NOTIFY modelDetailsChanged)
     Q_PROPERTY(QVariantList cloudModelChoices READ cloudModelChoices NOTIFY cloudModelChoicesChanged)
     Q_PROPERTY(QVariantList availableTtsVoices READ availableTtsVoices NOTIFY availableTtsVoicesChanged)
     Q_PROPERTY(double downloadProgress READ downloadProgress NOTIFY downloadProgressChanged)
@@ -159,6 +160,7 @@ public:
     [[nodiscard]] QString currentVoiceName() const;
     [[nodiscard]] QVariantList availableLlmModels() const;
     [[nodiscard]] QVariantList hfSearchResults() const;
+    [[nodiscard]] QVariantMap modelDetails() const;
     [[nodiscard]] QVariantList cloudModelChoices() const;
     [[nodiscard]] QVariantList availableTtsVoices() const;
     [[nodiscard]] double downloadProgress() const;
@@ -222,6 +224,7 @@ public:
     Q_INVOKABLE void setLlmModelId(const QString &modelId);
     Q_INVOKABLE void refreshOllamaModels();
     Q_INVOKABLE void searchModels(const QString &query);
+    Q_INVOKABLE void fetchModelDetails(const QString &modelId);
     Q_INVOKABLE void pullOllamaModel(const QString &modelName);
     Q_INVOKABLE void refreshCloudModels();
     Q_INVOKABLE void downloadLlmModel(const QString &modelId);
@@ -309,6 +312,7 @@ signals:
     void commandMappingsChanged();
     void availableLlmModelsChanged();
     void hfSearchResultsChanged();
+    void modelDetailsChanged();
     void cloudModelChoicesChanged();
     void availableTtsVoicesChanged();
 

@@ -47,6 +47,8 @@ public:
     [[nodiscard]] QString downloadStatus() const { return m_downloadStatus; }
     [[nodiscard]] QVariantList hfSearchResults() const { return m_hfSearchResults; }
     void searchHuggingFaceModels(const QString &query);
+    void fetchModelDetails(const QString &modelId);
+    [[nodiscard]] QVariantMap modelDetails() const { return m_modelDetails; }
     [[nodiscard]] QString lastHfQuery() const { return m_lastHfQuery; }
     void setDownloadProgress(double p) { m_downloadProgress = p; emit downloadProgressChanged(); }
     void setDownloading(bool d) { m_downloading = d; emit downloadingChanged(); }
@@ -129,6 +131,7 @@ signals:
     void downloadProgressChanged();
     void availableLlmModelsChanged();
     void hfSearchResultsChanged();
+    void modelDetailsChanged();
     void downloadingChanged();
     void downloadStatusChanged();
     void maxHistoryPairsChanged();
@@ -203,6 +206,7 @@ private:
     QString m_piperModelPath;
     QVariantList m_cloudModelChoices;
     QVariantList m_hfSearchResults;
+    QVariantMap m_modelDetails;
     QString m_lastHfQuery;
     QString m_voiceLangFilter;
 };
