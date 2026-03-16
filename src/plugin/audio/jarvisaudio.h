@@ -33,6 +33,7 @@ public:
     [[nodiscard]] QString lastTranscription() const { return m_lastTranscription; }
 
     void toggleWakeWord();
+    void reloadWhisperModel();
     void startVoiceCommand();
     void stopVoiceCommand();
     void setTtsSpeaking(bool speaking);

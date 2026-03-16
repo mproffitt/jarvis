@@ -92,6 +92,8 @@ class JarvisBackend : public QObject
     Q_PROPERTY(bool autoStartWakeWord READ autoStartWakeWord NOTIFY autoStartWakeWordChanged)
     Q_PROPERTY(bool noiseSuppression READ noiseSuppression NOTIFY noiseSuppressionChanged)
     Q_PROPERTY(QString whisperModel READ whisperModel NOTIFY whisperModelChanged)
+    Q_PROPERTY(bool whisperGpu READ whisperGpu NOTIFY whisperGpuChanged)
+    Q_PROPERTY(QVariantList whisperModelList READ whisperModelList NOTIFY whisperModelListChanged)
     Q_PROPERTY(QString wakeWord READ wakeWord NOTIFY wakeWordChanged)
     Q_PROPERTY(QString personalityPrompt READ personalityPrompt NOTIFY personalityPromptChanged)
 
@@ -175,6 +177,8 @@ public:
     [[nodiscard]] bool autoStartWakeWord() const;
     [[nodiscard]] bool noiseSuppression() const;
     [[nodiscard]] QString whisperModel() const;
+    [[nodiscard]] bool whisperGpu() const;
+    [[nodiscard]] QVariantList whisperModelList() const { return m_whisperModelList; }
     [[nodiscard]] QString wakeWord() const;
     [[nodiscard]] QString personalityPrompt() const;
 
@@ -238,6 +242,9 @@ public:
     Q_INVOKABLE void setAutoStartWakeWord(bool enabled);
     Q_INVOKABLE void setNoiseSuppression(bool enabled);
     Q_INVOKABLE void setWhisperModel(const QString &model);
+    Q_INVOKABLE void setWhisperGpu(bool enabled);
+    Q_INVOKABLE void fetchWhisperModels();
+    Q_INVOKABLE void downloadWhisperModel(const QString &filename);
     Q_INVOKABLE void setWakeWord(const QString &word);
     Q_INVOKABLE void setContinuousMode(bool enabled);
     Q_INVOKABLE void setSmartRouting(bool enabled);
@@ -302,6 +309,8 @@ signals:
     void autoStartWakeWordChanged();
     void noiseSuppressionChanged();
     void whisperModelChanged();
+    void whisperGpuChanged();
+    void whisperModelListChanged();
     void wakeWordChanged();
     void personalityPromptChanged();
     void continuousModeChanged();
@@ -440,6 +449,7 @@ private:
     bool m_continuousMode{false};
     bool m_conversationActive{false};
     QStringList m_whisperLog;
+    QVariantList m_whisperModelList;
     int m_emptyTranscriptionCount{0};
     QTimer *m_conversationTimeout{nullptr};
 

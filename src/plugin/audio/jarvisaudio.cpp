@@ -431,7 +431,7 @@ void JarvisAudio::initWhisper()
     qDebug() << "[JARVIS] Loading whisper model from:" << modelPath;
 
     whisper_context_params cparams = whisper_context_default_params();
-    cparams.use_gpu = false;
+    cparams.use_gpu = m_settings->whisperGpu();
 
     m_whisperCtx = whisper_init_from_file_with_params(
         modelPath.toUtf8().constData(), cparams);
@@ -439,15 +439,29 @@ void JarvisAudio::initWhisper()
     if (!m_whisperCtx) {
         qWarning() << "[JARVIS] Failed to initialize whisper context from:" << modelPath;
     } else {
-        qDebug() << "[JARVIS] Whisper model loaded successfully (tiny).";
+        qDebug() << "[JARVIS] Whisper model loaded successfully.";
     }
+}
+
+void JarvisAudio::reloadWhisperModel()
+{
+    if (m_whisperBusy.load()) {
+        QTimer::singleShot(200, this, &JarvisAudio::reloadWhisperModel);
+        return;
+    }
+
+    QMutexLocker lock(&m_whisperMutex);
+    if (m_whisperCtx) {
+        whisper_free(m_whisperCtx);
+        m_whisperCtx = nullptr;
+    }
+    initWhisper();
+    qDebug() << "[JARVIS] Whisper model reloaded:" << (m_whisperCtx ? "OK" : "FAILED");
 }
 
 QString JarvisAudio::findWhisperModel() const
 {
-    // Search for the configured model size first, then fall back to smaller models
-    const QString preferred = m_settings->whisperModel(); // "tiny", "base", "small"
-    const QStringList sizes = {preferred, QStringLiteral("tiny"), QStringLiteral("base"), QStringLiteral("small")};
+    const QString preferred = m_settings->whisperModel();
     const QStringList dirs = {
         QDir::homePath() + QStringLiteral("/.local/share/jarvis/"),
         QStringLiteral("/usr/share/jarvis/"),
@@ -456,9 +470,17 @@ QString JarvisAudio::findWhisperModel() const
         QStringLiteral("/usr/share/whisper/"),
     };
 
+    // Try exact match first (e.g. "small.en-q5_1" → "ggml-small.en-q5_1.bin")
+    for (const auto &dir : dirs) {
+        const QString exact = dir + QStringLiteral("ggml-%1.bin").arg(preferred);
+        if (QFileInfo::exists(exact)) return exact;
+    }
+
+    // Fall back to base name variants then smaller models
+    const QString baseName = preferred.section('.', 0, 0).section('-', 0, 0);
+    const QStringList sizes = {baseName, QStringLiteral("tiny"), QStringLiteral("base"), QStringLiteral("small")};
     for (const auto &size : sizes) {
         for (const auto &dir : dirs) {
-            // Try multilingual first, then english-only
             const QString multi = dir + QStringLiteral("ggml-%1.bin").arg(size);
             if (QFileInfo::exists(multi)) return multi;
             const QString en = dir + QStringLiteral("ggml-%1.en.bin").arg(size);

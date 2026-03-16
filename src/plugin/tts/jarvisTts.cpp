@@ -82,6 +82,13 @@ void JarvisTts::ensurePwCat()
         m_playProc = nullptr;
     }
 
+    // Kill any draining pw-cat from a previous response to prevent cross-talk
+    if (m_draining) {
+        m_draining->kill();
+        m_draining->deleteLater();
+        m_draining = nullptr;
+    }
+
     m_playProc = new QProcess(this);
     m_playProc->setProcessChannelMode(QProcess::ForwardedErrorChannel);
     m_playProc->start(QStringLiteral("pw-cat"), {

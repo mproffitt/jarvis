@@ -259,6 +259,7 @@ void JarvisBackend::connectModuleSignals()
     connect(m_settings, &JarvisSettings::autoStartWakeWordChanged, this, &JarvisBackend::autoStartWakeWordChanged);
     connect(m_settings, &JarvisSettings::noiseSuppressionChanged, this, &JarvisBackend::noiseSuppressionChanged);
     connect(m_settings, &JarvisSettings::whisperModelChanged, this, &JarvisBackend::whisperModelChanged);
+    connect(m_settings, &JarvisSettings::whisperGpuChanged, this, &JarvisBackend::whisperGpuChanged);
     connect(m_settings, &JarvisSettings::smartRoutingChanged, this, &JarvisBackend::smartRoutingChanged);
     connect(m_settings, &JarvisSettings::fastModelIdChanged, this, &JarvisBackend::fastModelIdChanged);
     connect(m_settings, &JarvisSettings::wakeWordChanged, this, &JarvisBackend::wakeWordChanged);
@@ -488,7 +489,110 @@ void JarvisBackend::setVoiceCmdMaxSeconds(int seconds) { m_settings->setVoiceCmd
 void JarvisBackend::setSilenceTimeoutMs(int ms) { m_settings->setSilenceTimeoutMs(ms); }
 void JarvisBackend::setAutoStartWakeWord(bool enabled) { m_settings->setAutoStartWakeWord(enabled); }
 void JarvisBackend::setNoiseSuppression(bool enabled) { m_settings->setNoiseSuppression(enabled); }
-void JarvisBackend::setWhisperModel(const QString &model) { m_settings->setWhisperModel(model); }
+void JarvisBackend::setWhisperModel(const QString &model)
+{
+    m_settings->setWhisperModel(model);
+    m_audio->reloadWhisperModel();
+    setStatus(QStringLiteral("Whisper model switched to %1.").arg(model));
+}
+bool JarvisBackend::whisperGpu() const { return m_settings->whisperGpu(); }
+void JarvisBackend::setWhisperGpu(bool enabled)
+{
+    m_settings->setWhisperGpu(enabled);
+    m_audio->reloadWhisperModel();
+    setStatus(enabled ? QStringLiteral("Whisper GPU enabled.") : QStringLiteral("Whisper GPU disabled."));
+}
+void JarvisBackend::fetchWhisperModels()
+{
+    const QByteArray url = QByteArrayLiteral(
+        "https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main");
+    QNetworkRequest request{QUrl::fromEncoded(url)};
+    request.setTransferTimeout(10000);
+    auto *reply = m_networkManager->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) return;
+        const auto files = QJsonDocument::fromJson(reply->readAll()).array();
+        const QString dataDir = QDir::homePath() + QStringLiteral("/.local/share/jarvis");
+        m_whisperModelList.clear();
+        for (const auto &f : files) {
+            const auto obj = f.toObject();
+            const QString path = obj[QStringLiteral("path")].toString();
+            if (!path.startsWith(QStringLiteral("ggml-")) || !path.endsWith(QStringLiteral(".bin")))
+                continue;
+            const qint64 size = obj[QStringLiteral("size")].toVariant().toLongLong();
+            const QString sizeStr = size >= 1073741824
+                ? QStringLiteral("%1 GB").arg(size / 1073741824.0, 0, 'f', 1)
+                : QStringLiteral("%1 MB").arg(size / 1048576.0, 0, 'f', 0);
+            QString name = path;
+            name.remove(QStringLiteral("ggml-")).remove(QStringLiteral(".bin"));
+            bool englishOnly = name.contains(QStringLiteral(".en"));
+            name.remove(QStringLiteral(".en"));
+            QString quant;
+            static const QRegularExpression quantRe(QStringLiteral("-(q[0-9]+_[0-9]+)$"),
+                QRegularExpression::CaseInsensitiveOption);
+            const auto qm = quantRe.match(name);
+            if (qm.hasMatch()) { quant = qm.captured(1).toUpper(); name = name.left(qm.capturedStart()); }
+            name[0] = name[0].toUpper();
+            QStringList tags;
+            if (englishOnly) tags << QStringLiteral("English"); else tags << QStringLiteral("Multilingual");
+            if (!quant.isEmpty()) tags << quant;
+            m_whisperModelList.append(QVariantMap{
+                {QStringLiteral("file"), path},
+                {QStringLiteral("name"), QStringLiteral("%1 (%2)").arg(name, tags.join(QStringLiteral(", ")))},
+                {QStringLiteral("size"), sizeStr},
+                {QStringLiteral("installed"), QFileInfo::exists(dataDir + QStringLiteral("/") + path)},
+            });
+        }
+        emit whisperModelListChanged();
+    });
+}
+void JarvisBackend::downloadWhisperModel(const QString &filename)
+{
+    const QString dataDir = QDir::homePath() + QStringLiteral("/.local/share/jarvis");
+    QDir().mkpath(dataDir);
+    const QString destPath = dataDir + QStringLiteral("/") + filename;
+    const QString url = QStringLiteral(
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/%1").arg(filename);
+    setStatus(QStringLiteral("Downloading %1...").arg(filename));
+    m_settings->setDownloading(true);
+    m_settings->setDownloadProgress(0);
+    QNetworkRequest request{QUrl(url)};
+    request.setTransferTimeout(300000);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    auto *reply = m_networkManager->get(request);
+    connect(reply, &QNetworkReply::downloadProgress, this, [this, filename](qint64 received, qint64 total) {
+        if (total > 0) {
+            m_settings->setDownloadProgress(static_cast<double>(received) / total);
+            m_settings->setDownloadStatus(QStringLiteral("Downloading %1: %2%")
+                .arg(filename).arg(received * 100 / total));
+        }
+    });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, destPath, filename]() {
+        reply->deleteLater();
+        m_settings->setDownloading(false);
+        m_settings->setDownloadProgress(0);
+        if (reply->error() != QNetworkReply::NoError) {
+            setStatus(QStringLiteral("Download failed: %1").arg(reply->errorString()));
+            return;
+        }
+        QFile file(destPath);
+        if (file.open(QIODevice::WriteOnly)) {
+            file.write(reply->readAll());
+            file.close();
+            QString modelName = filename;
+            modelName.remove(QStringLiteral("ggml-")).remove(QStringLiteral(".bin"));
+            m_settings->setWhisperModel(modelName);
+            emit whisperModelChanged();
+            m_audio->reloadWhisperModel();
+            setStatus(QStringLiteral("Whisper model switched to %1.").arg(modelName));
+            fetchWhisperModels();
+        } else {
+            setStatus(QStringLiteral("Failed to save %1").arg(filename));
+        }
+    });
+}
 void JarvisBackend::setWakeWord(const QString &word) { m_settings->setWakeWord(word); }
 
 void JarvisBackend::setContinuousMode(bool enabled)

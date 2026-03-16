@@ -50,30 +50,16 @@ Item {
                 }
             }
 
-            ComboBox {
+            Label {
                 Kirigami.FormData.label: i18n("Whisper model:")
-                model: [
-                    { value: "tiny",  text: "Tiny (75MB — fastest, least accurate)" },
-                    { value: "base",  text: "Base (142MB — good balance)" },
-                    { value: "small", text: "Small (466MB — best accuracy)" }
-                ]
-                textRole: "text"
-                valueRole: "value"
-                currentIndex: {
-                    var m = JarvisBackend.whisperModel
-                    for (var i = 0; i < model.length; i++)
-                        if (model[i].value === m) return i
-                    return 0
-                }
-                onActivated: JarvisBackend.setWhisperModel(currentValue)
+                text: JarvisBackend.whisperModel
+                font.bold: true
             }
 
-            Label {
-                text: i18n("Requires restart. Download models from huggingface.co/ggerganov/whisper.cpp and place in ~/.local/share/jarvis/")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
+            CheckBox {
+                Kirigami.FormData.label: i18n("GPU acceleration:")
+                checked: JarvisBackend.whisperGpu
+                onToggled: JarvisBackend.setWhisperGpu(checked)
             }
 
             CheckBox {
@@ -112,6 +98,46 @@ Item {
             }
 
         }
+
+        // Whisper model browser
+        Kirigami.Separator { Layout.fillWidth: true; Layout.topMargin: Kirigami.Units.largeSpacing }
+        Label { text: i18n("Available Whisper Models"); font.bold: true; Layout.leftMargin: Kirigami.Units.largeSpacing; Layout.topMargin: Kirigami.Units.smallSpacing }
+        Component.onCompleted: JarvisBackend.fetchWhisperModels()
+        Repeater {
+            model: JarvisBackend.whisperModelList
+            delegate: Kirigami.AbstractCard {
+                Layout.fillWidth: true; Layout.leftMargin: Kirigami.Units.smallSpacing; Layout.rightMargin: Kirigami.Units.smallSpacing
+                contentItem: RowLayout {
+                    spacing: Kirigami.Units.smallSpacing
+                    Label { text: modelData.name; font.bold: true }
+                    Label { text: modelData.size; color: Kirigami.Theme.disabledTextColor; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+                    Item { Layout.fillWidth: true }
+                    Label {
+                        visible: modelData.installed && modelData.file === ("ggml-" + JarvisBackend.whisperModel + ".bin")
+                        text: i18n("In use")
+                        color: Kirigami.Theme.positiveTextColor
+                        font.pointSize: Kirigami.Theme.smallFont.pointSize
+                    }
+                    Button {
+                        visible: !modelData.installed || modelData.file !== ("ggml-" + JarvisBackend.whisperModel + ".bin")
+                        text: modelData.installed ? i18n("Use") : i18n("Download")
+                        icon.name: modelData.installed ? "dialog-ok-apply" : "download"
+                        enabled: !JarvisBackend.downloading
+                        onClicked: {
+                            if (modelData.installed) {
+                                var name = modelData.file.replace("ggml-", "").replace(".bin", "")
+                                JarvisBackend.setWhisperModel(name)
+                            } else {
+                                JarvisBackend.downloadWhisperModel(modelData.file)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ProgressBar { visible: JarvisBackend.downloading; value: JarvisBackend.downloadProgress; Layout.fillWidth: true; Layout.leftMargin: Kirigami.Units.largeSpacing; Layout.rightMargin: Kirigami.Units.largeSpacing }
+        Label { visible: JarvisBackend.downloading; text: JarvisBackend.downloadStatus; Layout.leftMargin: Kirigami.Units.largeSpacing; color: Kirigami.Theme.disabledTextColor; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+        Kirigami.Separator { Layout.fillWidth: true; Layout.topMargin: Kirigami.Units.largeSpacing }
 
         // Sliders outside FormLayout for full width
         Label {
