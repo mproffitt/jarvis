@@ -278,7 +278,7 @@ void JarvisTts::processNextSentence()
             }
 
             piper_audio_chunk chunk{};
-            while (true) {
+            while (m_playingBack) {
                 rc = piper_synthesize_next(synth, &chunk);
                 if (rc == PIPER_DONE) {
                     break;
@@ -287,6 +287,9 @@ void JarvisTts::processNextSentence()
                     qWarning() << "[JARVIS] libpiper: piper_synthesize_next failed:" << rc;
                     break;
                 }
+
+                // Check again after potentially slow synthesis
+                if (!m_playingBack) break;
 
                 // Convert float [-1,1] to int16
                 const size_t numSamples = chunk.num_samples;
@@ -357,6 +360,10 @@ void JarvisTts::stop()
         m_sentenceQueue.clear();
     }
     m_playingBack = false;
+
+    // Flush any buffered audio immediately
+    if (m_playback)
+        m_playback->flush();
 
     // Kill any in-flight sentence process
     if (m_sentenceProc) {

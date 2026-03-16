@@ -90,6 +90,13 @@ void PwPlayback::write(const QByteArray &pcm16)
     m_draining = false;
 }
 
+void PwPlayback::flush()
+{
+    QMutexLocker lock(&m_bufferMutex);
+    m_buffer.clear();
+    m_draining = false;
+}
+
 void PwPlayback::drain()
 {
     m_draining = true;

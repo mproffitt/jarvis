@@ -30,6 +30,9 @@ public:
     /// Write PCM data to the playback stream. Thread-safe.
     void write(const QByteArray &pcm16);
 
+    /// Clear all buffered audio immediately (for interruption).
+    void flush();
+
     /// Signal the stream that no more data is coming for this batch.
     /// The stream stays alive but drains its buffer.
     void drain();

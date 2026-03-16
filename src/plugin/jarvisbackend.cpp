@@ -99,6 +99,7 @@ void JarvisBackend::connectModuleSignals()
         }
         // Fully reset processing state so new commands can be sent
         m_processing = false;
+        m_ragActive = false;
         m_streamBuffer.clear();
         m_fullStreamedResponse.clear();
         m_spokenSoFar.clear();
@@ -1299,6 +1300,8 @@ bool JarvisBackend::dispatchToolCall(const QString &name, const QJsonObject &arg
 
 void JarvisBackend::doRagSearch(const QString &userMessage)
 {
+    m_ragActive = false; // Reset from previous query
+
     // For providers with native tool support, skip — file_search tool handles it
     if (m_settings->isClaudeProvider() || m_settings->llmProvider() == QStringLiteral("openai"))
         return;
@@ -2514,7 +2517,7 @@ QString JarvisBackend::stripActionsFromResponse(const QString &responseText) con
     // Remove [ACTION:...] lines and CONTENT_START/CONTENT_END blocks
     static const QRegularExpression actionLineRe(
         QStringLiteral("\\[ACTION:[^\\]]+\\].*"),
-        QRegularExpression::MultilineOption);
+        QRegularExpression::MultilineOption | QRegularExpression::CaseInsensitiveOption);
     static const QRegularExpression contentBlockRe(
         QStringLiteral("CONTENT_START\\n[\\s\\S]*?CONTENT_END"));
 
@@ -2538,15 +2541,19 @@ void JarvisBackend::parseAndExecuteActions(const QString &responseText)
     }
 
     // Parse [ACTION:type] arg lines
+    // Match both [ACTION:type] arg and [ACTION:type arg] formats
     static const QRegularExpression actionRe(
-        QStringLiteral("\\[ACTION:(\\w+)\\]\\s*(.*)"),
-        QRegularExpression::MultilineOption);
+        QStringLiteral("\\[ACTION:(\\w+)\\]?\\s*([^\\]]*)\\]?"),
+        QRegularExpression::MultilineOption | QRegularExpression::CaseInsensitiveOption);
 
     auto it = actionRe.globalMatch(responseText);
     while (it.hasNext()) {
         const auto match = it.next();
         const QString actionType = match.captured(1).toLower();
-        const QString arg = match.captured(2).trimmed();
+        QString arg = match.captured(2).trimmed();
+        // Strip trailing ] in case model wrote [action:type arg] instead of [action:type] arg
+        while (arg.endsWith(']')) arg.chop(1);
+        arg = arg.trimmed();
 
         qDebug() << "[JARVIS] Action:" << actionType << "arg:" << arg;
 

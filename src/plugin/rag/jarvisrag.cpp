@@ -51,7 +51,7 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
     for (const auto &term : searchTerms) {
         Baloo::Query q;
         q.setSearchString(term);
-        q.setLimit(static_cast<uint>(maxFiles * 10));
+        q.setLimit(100);
 
         Baloo::ResultIterator it = q.exec();
         while (it.next()) {
@@ -68,11 +68,15 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
     // Score each file by how many search terms match its path.
     // Uses exact substring match + fuzzy match (Levenshtein ≤ 2)
     // on individual path components to handle whisper mishearings.
+    // Bonus points when a single directory component matches multiple terms
+    // (e.g. "workload-clusters-fleet" matching "workload", "clusters", "fleet").
     QMap<QString, int> fileScores;
     for (const auto &path : allPaths) {
         const QString lowerPath = path.toLower();
         const QStringList pathParts = lowerPath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
         int score = 0;
+
+        // Check each term against the full path
         for (const auto &term : searchTerms) {
             if (lowerPath.contains(term)) {
                 ++score;
@@ -82,7 +86,6 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
             if (term.length() >= 4) {
                 for (const auto &part : pathParts) {
                     if (qAbs(term.length() - part.length()) > 2) continue;
-                    // Levenshtein distance
                     const int tLen = term.length(), pLen = part.length();
                     QList<int> prev(pLen + 1), curr(pLen + 1);
                     for (int j = 0; j <= pLen; ++j) prev[j] = j;
@@ -98,14 +101,29 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
                 }
             }
         }
-        // At least 1 point for being in Baloo results at all
+
+        // Bonus: a single path component matching multiple search terms
+        // (e.g. dir "workload-clusters-fleet" matches 3 terms at once)
+        for (const auto &part : pathParts) {
+            int partMatches = 0;
+            for (const auto &term : searchTerms) {
+                if (part.contains(term)) ++partMatches;
+            }
+            if (partMatches >= 2) score += partMatches; // Bonus for concentrated matches
+        }
+
         fileScores[path] = qMax(score, 1);
     }
 
-    // Sort by score (most matching terms in path first)
+    // Sort by score, with README files getting a tiebreaker boost
     QList<QPair<int, QString>> ranked;
-    for (auto it = fileScores.constBegin(); it != fileScores.constEnd(); ++it)
-        ranked.append({it.value(), it.key()});
+    for (auto it = fileScores.constBegin(); it != fileScores.constEnd(); ++it) {
+        int bonus = 0;
+        const QString lower = it.key().toLower();
+        if (lower.endsWith(QStringLiteral("readme.md")) || lower.endsWith(QStringLiteral("readme")))
+            bonus = 1; // Slight boost for READMEs at same score level
+        ranked.append({it.value() * 10 + bonus, it.key()});
+    }
     std::sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) {
         return a.first > b.first;
     });
@@ -116,7 +134,7 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
     int fileCount = 0;
     for (const auto &[score, filePath] : ranked) {
         if (fileCount >= maxFiles) break;
-        if (score < 2) continue; // Skip weak matches
+        if (score < 20) continue; // Skip weak matches (scores are *10 for tiebreaker)
 
         const QFileInfo info(filePath);
         if (info.size() > 5 * 1024 * 1024) continue;
