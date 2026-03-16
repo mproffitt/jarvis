@@ -444,11 +444,18 @@ private:
     QString m_pendingOAuthMessage;
     int m_toolCallLoopCount{0};
 
+    // Interrupted context — lets the model know it was cut off
+    QString m_interruptedQuestion;
+    QString m_interruptedAnswer;
+    QString m_interruptedSpoken;
+    QString m_currentUserMessage; // Original message before RAG modification
+
     // Continuous conversation
     bool m_continuousMode{false};
     bool m_conversationActive{false};
     QStringList m_whisperLog;
     bool m_ragActive{false};
+    QString m_ragContext; // Transient RAG content for current request only
     QVariantList m_whisperModelList;
     int m_emptyTranscriptionCount{0};
     QTimer *m_conversationTimeout{nullptr};

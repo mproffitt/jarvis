@@ -92,12 +92,32 @@ void JarvisBackend::connectModuleSignals()
     connect(m_audio, &JarvisAudio::ttsInterrupted, this, [this]() {
         qDebug() << "[JARVIS] TTS interrupted by wake word";
         m_tts->stop();
-        // Abort any in-flight LLM request
+        // Abort any in-flight LLM request.
+        // Null the member BEFORE abort() — abort() may synchronously emit
+        // finished(), which calls onLlmStreamFinished(). That must see
+        // m_streamReply == nullptr so it bails out instead of finalizing
+        // (which would re-speak the whole response).
         if (m_streamReply) {
-            m_streamReply->abort();
-            m_streamReply->deleteLater();
+            auto *reply = m_streamReply;
             m_streamReply = nullptr;
+            reply->abort();
+            reply->deleteLater();
         }
+        // Stash interrupted context so the model can reference it next turn.
+        // Use m_currentUserMessage (the original query) — not the history entry
+        // which RAG may have modified to include file contents.
+        if (!m_currentUserMessage.isEmpty()) {
+            m_interruptedQuestion = m_currentUserMessage;
+            m_interruptedAnswer = stripActionsFromResponse(m_fullStreamedResponse).trimmed();
+            m_interruptedSpoken = m_spokenSoFar;
+            m_currentUserMessage.clear();
+        }
+        // Remove the dangling user message that never got a response
+        if (!m_conversationHistory.empty()
+            && m_conversationHistory.back().role == QStringLiteral("user")) {
+            m_conversationHistory.pop_back();
+        }
+
         // Fully reset processing state so new commands can be sent
         m_processing = false;
         m_ragActive = false;
@@ -1043,6 +1063,23 @@ void JarvisBackend::sendToLlm(const QString &userMessage)
     emit processingChanged();
     setStatus("Processing...");
 
+    m_currentUserMessage = userMessage; // Save before RAG modifies history
+
+    // If the previous response was interrupted, add the incomplete exchange
+    // to conversation history so the model can see what happened and naturally
+    // offer to continue, say "as I was saying...", or just move on.
+    if (!m_interruptedQuestion.isEmpty()) {
+        m_conversationHistory.push_back({QStringLiteral("user"),
+            QJsonValue(m_interruptedQuestion)});
+        QString partialReply = m_interruptedAnswer.isEmpty()
+            ? QStringLiteral("[I was interrupted before I could respond]")
+            : m_interruptedAnswer + QStringLiteral("\n\n[I was interrupted here]");
+        m_conversationHistory.push_back({QStringLiteral("assistant"),
+            QJsonValue(partialReply)});
+        m_interruptedQuestion.clear();
+        m_interruptedAnswer.clear();
+        m_interruptedSpoken.clear();
+    }
     m_conversationHistory.push_back({QStringLiteral("user"), QJsonValue(userMessage)});
     trimConversationToTokenLimit();
 
@@ -1325,13 +1362,30 @@ QString JarvisBackend::doRagSearch(const QString &userMessage)
 void JarvisBackend::onRagFinished(const QString &userMessage, const QString &context)
 {
     m_ragActive = !context.isEmpty();
+    m_ragContext = context;
+
+    // When new RAG results are available, strip file content from previous
+    // turns so only the current turn carries it. If RAG found nothing,
+    // leave previous context intact — the user may be asking a follow-up.
+    if (m_ragActive) {
+        static const QString ragPrefix = QStringLiteral("Here are relevant files from my computer:");
+        static const QString ragMarker = QStringLiteral("Do NOT open, read, or cat any files. Do NOT use ACTION blocks.");
+        for (auto &msg : m_conversationHistory) {
+            if (msg.role != QStringLiteral("user") || !msg.content.isString())
+                continue;
+            const QString text = msg.content.toString();
+            const int markerPos = text.indexOf(ragMarker);
+            if (markerPos < 0 || !text.startsWith(ragPrefix))
+                continue;
+            msg.content = QJsonValue(text.mid(markerPos + ragMarker.length()).trimmed());
+        }
+    }
 
     if (m_ragActive) {
         qDebug() << "[JARVIS] RAG: injecting file context";
         setStatus(QStringLiteral("Found relevant files."));
 
-        // Prepend file content to the user's actual message so it's the most
-        // recent context the model sees — not buried in earlier history.
+        // Wrap the current user message with RAG context
         if (!m_conversationHistory.empty()) {
             auto &last = m_conversationHistory.back();
             if (last.role == QStringLiteral("user")) {
@@ -1364,7 +1418,6 @@ QJsonArray JarvisBackend::buildConversationContext() const
     for (const auto &[role, content] : m_conversationHistory) {
         QJsonObject msg;
         msg[QStringLiteral("role")] = role;
-        // content can be a plain string or a QJsonArray (tool_use/tool_result blocks)
         if (content.isArray())
             msg[QStringLiteral("content")] = content.toArray();
         else
@@ -2295,6 +2348,9 @@ void JarvisBackend::clearHistory()
     m_chatHistory.clear();
     m_conversationHistory.clear();
     m_lastResponse.clear();
+    m_interruptedQuestion.clear();
+    m_interruptedAnswer.clear();
+    m_interruptedSpoken.clear();
     emit chatHistoryChanged();
     emit lastResponseChanged();
     saveChatHistory();

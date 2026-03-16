@@ -206,11 +206,16 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
         return a.score > b.score;
     });
 
-    // Pick top results
+    // Pick top results — require a meaningful content score.
+    // A single common word matching a few times in a large file is noise.
+    // Require at least 2 distinct search terms to match, or a high score
+    // from concentrated matches of a single distinctive term.
+    constexpr double minContentScore = 0.5;
     QString context;
     int fileCount = 0;
     for (const auto &[score, filePath] : contentRanked) {
         if (fileCount >= maxFiles) break;
+        if (score < minContentScore) break; // Sorted, so all remaining are worse
 
         const QString &text = m_textCache.contains(filePath)
             ? m_textCache[filePath]

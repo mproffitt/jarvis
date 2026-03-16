@@ -69,6 +69,13 @@ void JarvisTts::initTts()
 {
     // Create PipeWire playback stream (shared by libpiper and piper binary)
     m_playback = new PwPlayback(this);
+    connect(m_playback, &PwPlayback::drained, this, [this]() {
+        // Audio buffer fully played — now safe to declare speaking finished
+        if (!m_playingBack && m_speaking.load()) {
+            m_speaking = false;
+            emit speakingChanged();
+        }
+    });
     m_playback->start();
 
 #ifdef HAVE_LIBPIPER
@@ -235,16 +242,10 @@ void JarvisTts::processNextSentence()
         QMutexLocker lock(&m_queueMutex);
         if (m_sentenceQueue.isEmpty()) {
             m_playingBack = false;
-            // Signal drain so PwPlayback can notify when buffer is empty
+            // Drain the PipeWire buffer — the drained() signal will emit
+            // speakingChanged(false) once audio has actually finished playing.
             if (m_playback)
                 m_playback->drain();
-            // Defer speakingChanged to let the playback buffer flush
-            QTimer::singleShot(300, this, [this]() {
-                if (!m_playingBack) {
-                    m_speaking = false;
-                    emit speakingChanged();
-                }
-            });
             return;
         }
         sentence = m_sentenceQueue.dequeue();
