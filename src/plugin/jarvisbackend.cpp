@@ -1364,37 +1364,61 @@ void JarvisBackend::onRagFinished(const QString &userMessage, const QString &con
     m_ragActive = !context.isEmpty();
     m_ragContext = context;
 
-    // When new RAG results are available, strip file content from previous
-    // turns so only the current turn carries it. If RAG found nothing,
-    // leave previous context intact — the user may be asking a follow-up.
-    if (m_ragActive) {
-        static const QString ragPrefix = QStringLiteral("Here are relevant files from my computer:");
-        static const QString ragMarker = QStringLiteral("Do NOT open, read, or cat any files. Do NOT use ACTION blocks.");
-        for (auto &msg : m_conversationHistory) {
-            if (msg.role != QStringLiteral("user") || !msg.content.isString())
-                continue;
-            const QString text = msg.content.toString();
-            const int markerPos = text.indexOf(ragMarker);
-            if (markerPos < 0 || !text.startsWith(ragPrefix))
-                continue;
-            msg.content = QJsonValue(text.mid(markerPos + ragMarker.length()).trimmed());
+    static const QString ragPrefix = QStringLiteral("Here are relevant files from my computer:");
+    static const QString ragMarker = QStringLiteral("Do NOT open, read, or cat any files. Do NOT use ACTION blocks.");
+    static const QString newRagPrefix = QStringLiteral("I've found some potentially relevant files on my computer:");
+    static const QString newRagMarker = QStringLiteral("Do NOT use ACTION blocks to read these files; I have already provided the content.");
+
+    auto stripRag = [&](ChatMessage &msg) {
+        if (msg.role != QStringLiteral("user") || !msg.content.isString())
+            return;
+        const QString text = msg.content.toString();
+        
+        // Check for old format
+        int pos = text.indexOf(ragMarker);
+        if (pos >= 0 && text.startsWith(ragPrefix)) {
+            msg.content = QJsonValue(text.mid(pos + ragMarker.length()).trimmed());
+            return;
         }
-    }
+        
+        // Check for new format
+        pos = text.indexOf(newRagMarker);
+        if (pos >= 0 && text.startsWith(newRagPrefix)) {
+            msg.content = QJsonValue(text.mid(pos + newRagMarker.length()).trimmed());
+        }
+    };
 
     if (m_ragActive) {
+        m_ragTurnCounter = 0;
+        // Strip previous turns so only the current turn carries the bulk data
+        for (auto &msg : m_conversationHistory) {
+            stripRag(msg);
+        }
+
         qDebug() << "[JARVIS] RAG: injecting file context";
         setStatus(QStringLiteral("Found relevant files."));
 
-        // Wrap the current user message with RAG context
+        // Wrap the current user message with RAG context (Softer Prompting)
         if (!m_conversationHistory.empty()) {
             auto &last = m_conversationHistory.back();
             if (last.role == QStringLiteral("user")) {
                 const QString original = last.content.toString();
                 last.content = QJsonValue(QStringLiteral(
-                    "Here are relevant files from my computer:\n\n%1\n\n"
-                    "Using ONLY the file contents above, answer this: %2\n"
-                    "Do NOT open, read, or cat any files. Do NOT use ACTION blocks.")
-                    .arg(context, original));
+                    "%1\n\n%2\n\n"
+                    "If the file contents above are relevant to the following question, use them as context. "
+                    "Otherwise, you may ignore them and answer normally.\n\n"
+                    "Question: %3\n\n"
+                    "%4")
+                    .arg(newRagPrefix, context, original, newRagMarker));
+            }
+        }
+    } else {
+        // No new RAG results — increment counter for passive cleanup
+        m_ragTurnCounter++;
+        if (m_ragTurnCounter >= 2) {
+            qDebug() << "[JARVIS] RAG: passive cleanup of old context";
+            for (auto &msg : m_conversationHistory) {
+                stripRag(msg);
             }
         }
     }

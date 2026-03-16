@@ -455,6 +455,7 @@ private:
     bool m_conversationActive{false};
     QStringList m_whisperLog;
     bool m_ragActive{false};
+    int m_ragTurnCounter{0};
     QString m_ragContext; // Transient RAG content for current request only
     QVariantList m_whisperModelList;
     int m_emptyTranscriptionCount{0};
