@@ -361,9 +361,14 @@ void JarvisTts::stop()
     }
     m_playingBack = false;
 
-    // Flush any buffered audio immediately
-    if (m_playback)
+    // Flush buffered audio immediately, then again after a short delay
+    // to catch any data the synthesis thread writes between flag set and flush
+    if (m_playback) {
         m_playback->flush();
+        QTimer::singleShot(50, this, [this]() {
+            if (m_playback) m_playback->flush();
+        });
+    }
 
     // Kill any in-flight sentence process
     if (m_sentenceProc) {

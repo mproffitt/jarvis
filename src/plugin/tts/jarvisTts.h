@@ -60,7 +60,7 @@ private:
     // Sentence queue for streaming TTS
     QQueue<QString> m_sentenceQueue;
     QMutex m_queueMutex;
-    bool m_playingBack{false};
+    std::atomic<bool> m_playingBack{false};
 
     // Native PipeWire playback (replaces pw-cat)
     PwPlayback *m_playback{nullptr};

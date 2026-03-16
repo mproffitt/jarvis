@@ -1331,6 +1331,7 @@ void JarvisBackend::doRagSearch(const QString &userMessage)
         QStringLiteral("to"), QStringLiteral("for"), QStringLiteral("my"), QStringLiteral("me"),
         QStringLiteral("about"), QStringLiteral("from"), QStringLiteral("that"), QStringLiteral("this"),
         QStringLiteral("tell"), QStringLiteral("show"), QStringLiteral("give"),
+        QStringLiteral("talk"), QStringLiteral("know"), QStringLiteral("think"),
         QStringLiteral("please"), QStringLiteral("can"), QStringLiteral("you"),
         QStringLiteral("just"), QStringLiteral("some"), QStringLiteral("like"),
         QStringLiteral("play"), QStringLiteral("open"), QStringLiteral("hey"),
@@ -1348,14 +1349,21 @@ void JarvisBackend::doRagSearch(const QString &userMessage)
 
     qDebug() << "[JARVIS] RAG: injecting file context for:" << searchStr;
     setStatus(QStringLiteral("Found relevant files for: %1").arg(searchStr));
-    const QString ragMsg = QStringLiteral(
-        "[The following file contents were found on your computer. "
-        "Use them to answer the next question. "
-        "Do NOT use any ACTION blocks. Do NOT write files, open apps, or run commands. "
-        "Just answer verbally using the provided content.]\n\n%1").arg(context);
-    m_conversationHistory.push_back({QStringLiteral("user"), QJsonValue(ragMsg)});
-    m_conversationHistory.push_back({QStringLiteral("assistant"),
-        QJsonValue(QStringLiteral("I have the file contents. I'll answer verbally."))});
+
+    // Prepend file content to the user's actual message so it's the most
+    // recent context the model sees — not buried in earlier history.
+    // Modify the last user message in conversation history to include it.
+    if (!m_conversationHistory.empty()) {
+        auto &last = m_conversationHistory.back();
+        if (last.role == QStringLiteral("user")) {
+            const QString original = last.content.toString();
+            last.content = QJsonValue(QStringLiteral(
+                "Here are relevant files from my computer:\n\n%1\n\n"
+                "Using ONLY the file contents above, answer this: %2\n"
+                "Do NOT open, read, or cat any files. Do NOT use ACTION blocks.")
+                .arg(context, original));
+        }
+    }
     m_ragActive = true;
 }
 
