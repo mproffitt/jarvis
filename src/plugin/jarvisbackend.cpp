@@ -745,7 +745,17 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
         return;
     }
 
-    // Music — "play X" asks LLM for a specific search term, then opens Spotify
+    // Music
+    if (handleMusicRequest(command))
+        return;
+
+    // Otherwise send to LLM
+    addToChatHistory(QStringLiteral("user"), command);
+    sendToLlm(command);
+}
+
+bool JarvisBackend::handleMusicRequest(const QString &command)
+{
     static const QRegularExpression playRe(
         QStringLiteral("^(?:play|put on|listen to|queue)\\s+(.+)"),
         QRegularExpression::CaseInsensitiveOption);
@@ -756,24 +766,30 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
             query.chop(1);
         if (!query.isEmpty()) {
             setStatus(QStringLiteral("Finding music: %1").arg(query));
-            speak(QStringLiteral("Let me find something for you."));
+            speak(QStringLiteral("Let me find that for you."));
 
-            // Ask the LLM to convert the request into a specific search term
             const QString prompt = QStringLiteral(
-                "The user wants to listen to: %1\n"
-                "Respond with ONLY a Spotify search query — artist and/or song name. "
-                "Nothing else, no explanation, no punctuation, just the search term. "
-                "If the request is vague like 'some jazz', pick a specific artist or track. "
-                "Be creative and diverse — pick something different every time. "
-                "Don't always suggest the most famous artist in a genre. "
-                "Mix well-known and lesser-known artists across decades and subgenres.").arg(query);
+                "The user wants to listen to: %1\n\n"
+                "Respond with ONLY a JSON object, no markdown, no explanation:\n"
+                "{\n"
+                "  \"message\": \"a short phrase to speak aloud, e.g. 'Playing Unforgettable by Nat King Cole'\",\n"
+                "  \"artist\": \"artist name or empty string\",\n"
+                "  \"track\": \"track name or empty string\",\n"
+                "  \"search\": \"spotify search query\"\n"
+                "}\n\n"
+                "Rules:\n"
+                "- If the user named a specific artist/track, use exactly what they said\n"
+                "- If the request is vague (e.g. 'some jazz'), pick a specific artist and track — "
+                "be creative, diverse, and mix well-known with lesser-known artists\n"
+                "- The 'search' field should be what to type into Spotify's search bar\n"
+                "- The 'message' field is spoken aloud by TTS — keep it natural and brief").arg(query);
 
             QJsonObject body;
             body[QStringLiteral("messages")] = QJsonArray{
                 QJsonObject{{QStringLiteral("role"), QStringLiteral("user")},
                             {QStringLiteral("content"), prompt}}};
-            body[QStringLiteral("max_tokens")] = 50;
-            body[QStringLiteral("temperature")] = 1.3;
+            body[QStringLiteral("max_tokens")] = 150;
+            body[QStringLiteral("temperature")] = 0.8;
             body[QStringLiteral("stream")] = false;
 
             const QString modelId = m_settings->llmModelId();
@@ -803,15 +819,15 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
             auto *reply = m_networkManager->post(request, QJsonDocument(body).toJson());
             connect(reply, &QNetworkReply::finished, this, [this, reply, query]() {
                 reply->deleteLater();
-                QString searchTerm = query; // fallback to original
+                QString searchTerm = query;
+                QString message = QStringLiteral("Playing %1.").arg(query);
 
                 if (reply->error() == QNetworkReply::NoError) {
+                    // Extract text content from LLM response
                     const auto doc = QJsonDocument::fromJson(reply->readAll());
-                    // OpenAI/Ollama format
                     QString text = doc.object()[QStringLiteral("choices")].toArray()
                         .first().toObject()[QStringLiteral("message")].toObject()
                         [QStringLiteral("content")].toString().trimmed();
-                    // Claude format
                     if (text.isEmpty()) {
                         const auto content = doc.object()[QStringLiteral("content")].toArray();
                         for (const auto &c : content) {
@@ -819,28 +835,62 @@ void JarvisBackend::onVoiceCommandTranscribed(const QString &text)
                                 text = c.toObject()[QStringLiteral("text")].toString().trimmed();
                         }
                     }
-                    if (!text.isEmpty()) searchTerm = text;
+
+                    // Strip markdown code fences if present
+                    if (text.startsWith(QStringLiteral("```"))) {
+                        int start = text.indexOf('\n');
+                        int end = text.lastIndexOf(QStringLiteral("```"));
+                        if (start >= 0 && end > start)
+                            text = text.mid(start + 1, end - start - 1).trimmed();
+                    }
+
+                    // Parse the JSON response
+                    qDebug() << "[JARVIS] Music LLM response:" << text;
+                    const auto musicDoc = QJsonDocument::fromJson(text.toUtf8());
+                    if (musicDoc.isObject()) {
+                        const auto obj = musicDoc.object();
+                        const QString search = obj[QStringLiteral("search")].toString().trimmed();
+                        const QString artist = obj[QStringLiteral("artist")].toString().trimmed();
+                        const QString track = obj[QStringLiteral("track")].toString().trimmed();
+                        const QString msg = obj[QStringLiteral("message")].toString().trimmed();
+
+                        // Build search term: prefer "search" field, fall back to artist+track
+                        if (!search.isEmpty())
+                            searchTerm = search;
+                        else if (!artist.isEmpty() && !track.isEmpty())
+                            searchTerm = artist + QStringLiteral(" ") + track;
+                        else if (!artist.isEmpty())
+                            searchTerm = artist;
+                        else if (!track.isEmpty())
+                            searchTerm = track;
+
+                        if (!msg.isEmpty())
+                            message = msg;
+                    } else if (!text.isEmpty()) {
+                        // LLM returned plain text — use it as search term
+                        qDebug() << "[JARVIS] Music LLM returned plain text:" << text;
+                        // Strip quotes and punctuation
+                        text.remove('"').remove('\'');
+                        while (text.endsWith('.')) text.chop(1);
+                        text = text.trimmed();
+                        if (!text.isEmpty()) {
+                            searchTerm = text;
+                            message = QStringLiteral("Playing %1.").arg(text);
+                        }
+                    }
                 }
 
-                // Clean up the search term
-                while (searchTerm.endsWith('.') || searchTerm.endsWith('"') || searchTerm.endsWith('\''))
-                    searchTerm.chop(1);
-                while (searchTerm.startsWith('"') || searchTerm.startsWith('\''))
-                    searchTerm = searchTerm.mid(1);
-                searchTerm = searchTerm.trimmed();
-
-                const QString uri = QStringLiteral("spotify:search:%1").arg(searchTerm);
+                const QString uri = QStringLiteral("spotify:search:%1").arg(
+                    QString(searchTerm).replace(QLatin1Char(' '), QLatin1Char('+')));
                 QProcess::startDetached(QStringLiteral("xdg-open"), {uri});
                 m_tts->stop();
-                speak(QStringLiteral("Playing %1").arg(searchTerm));
+                speak(message);
                 setStatus(QStringLiteral("Spotify: %1").arg(searchTerm));
             });
-            return;
+            return true;
         }
     }
-
-    // Otherwise send to LLM
-    sendMessage(command);
+    return false;
 }
 
 // ─────────────────────────────────────────────
@@ -852,6 +902,10 @@ void JarvisBackend::sendMessage(const QString &message)
     if (message.trimmed().isEmpty()) return;
 
     addToChatHistory("user", message);
+
+    if (handleMusicRequest(message.trimmed()))
+        return;
+
     sendToLlm(message);
 }
 

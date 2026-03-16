@@ -27,7 +27,6 @@ find_package(Qt6 REQUIRED COMPONENTS
     Qml
     Network
     TextToSpeech
-    Multimedia
     Concurrent
     DBus
 )

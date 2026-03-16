@@ -5,6 +5,7 @@ set(jarvis_plugin_SRCS
     settings/jarvisoauth.cpp
     tts/jarvisTts.cpp
     audio/jarvisaudio.cpp
+    audio/pwcapture.cpp
     audio/micmonitor.cpp
     system/jarvissystem.cpp
     commands/jarviscommands.cpp
@@ -26,7 +27,6 @@ target_link_libraries(jarvis_plugin
     Qt6::Qml
     Qt6::Network
     Qt6::TextToSpeech
-    Qt6::Multimedia
     Qt6::Concurrent
     Qt6::DBus
     Plasma::Plasma

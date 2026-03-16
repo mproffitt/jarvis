@@ -50,13 +50,12 @@ static const struct pw_registry_events registryEvents = {
 MicMonitor::MicMonitor(QObject *parent)
     : QObject(parent)
 {
-    pw_init(nullptr, nullptr);
+    // pw_init is called by JarvisAudio before creating MicMonitor
 }
 
 MicMonitor::~MicMonitor()
 {
     stop();
-    pw_deinit();
 }
 
 void MicMonitor::start()
@@ -150,7 +149,9 @@ void MicMonitor::stop()
 void MicMonitor::onNodeAdded(uint32_t id, const char * /*mediaClass*/, const char *appName)
 {
     // Skip our own capture stream
-    if (appName && strstr(appName, "plasmashell") != nullptr)
+    if (appName && (strstr(appName, "plasmashell") != nullptr ||
+                    strstr(appName, "jarvis-capture") != nullptr ||
+                    strstr(appName, "Jarvis") != nullptr))
         return;
 
     qDebug() << "[JARVIS] MicMonitor: capture started by" << appName << "(id:" << id << ")";

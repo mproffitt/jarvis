@@ -97,6 +97,12 @@ void JarvisTts::ensurePwCat()
         qWarning() << "[JARVIS] libpiper: failed to start pw-cat";
         m_playProc->deleteLater();
         m_playProc = nullptr;
+    } else {
+        // Write ~50ms of silence to let pw-cat's PipeWire stream settle
+        // before real audio, preventing the first word from being cut off.
+        const int silenceSamples = 22050 / 20; // 50ms at 22050 Hz
+        QByteArray silence(silenceSamples * 2, '\0');
+        m_playProc->write(silence);
     }
 }
 #endif
@@ -267,8 +273,31 @@ void JarvisTts::processNextSentence()
         QMutexLocker lock(&m_queueMutex);
         if (m_sentenceQueue.isEmpty()) {
             m_playingBack = false;
+#ifdef HAVE_LIBPIPER
+            // Close stdin so pw-cat plays remaining buffered audio then exits.
+            // Defer speakingChanged until pw-cat finishes so the mic doesn't
+            // reopen while audio is still playing.
+            if (m_playProc) {
+                m_playProc->closeWriteChannel();
+                connect(m_playProc, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+                        this, [this](int, QProcess::ExitStatus) {
+                    sender()->deleteLater();
+                    if (m_draining) {
+                        m_draining = nullptr;
+                        m_speaking = false;
+                        emit speakingChanged();
+                    }
+                });
+                m_draining = m_playProc;
+                m_playProc = nullptr;
+            } else {
+                m_speaking = false;
+                emit speakingChanged();
+            }
+#else
             m_speaking = false;
             emit speakingChanged();
+#endif
             return;
         }
         sentence = m_sentenceQueue.dequeue();
@@ -404,6 +433,12 @@ void JarvisTts::stop()
         m_playProc->kill();
         m_playProc->deleteLater();
         m_playProc = nullptr;
+    }
+    // Kill pw-cat that was draining (finishing playback)
+    if (m_draining) {
+        m_draining->kill();
+        m_draining->deleteLater();
+        m_draining = nullptr;
     }
 #endif
 

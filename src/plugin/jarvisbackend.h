@@ -329,6 +329,7 @@ private:
     static int estimateTokenCount(const QString &text) { return text.length() / 4; }
     void trimConversationToTokenLimit();
     void handleScreenContext(const QString &question);
+    bool handleMusicRequest(const QString &command);
     void saveChatHistory();
     void loadChatHistory();
     void continueAfterToolCall();

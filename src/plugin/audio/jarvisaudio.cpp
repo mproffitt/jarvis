@@ -1,15 +1,16 @@
 #include "jarvisaudio.h"
+#include "pwcapture.h"
 #include "micmonitor.h"
 #include "../settings/jarvissettings.h"
 
 #include <QDir>
 #include <QFileInfo>
-#include <QAudioDevice>
 #include <QRegularExpression>
 #include <QtConcurrent>
 #include <QtMath>
-#include <thread>
 #include <QDebug>
+
+#include <pipewire/pipewire.h>
 
 JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
     : QObject(parent)
@@ -85,7 +86,7 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
     m_micMonitor->start();
 
     // Auto-start wake word detection
-    if (m_settings->autoStartWakeWord() && m_whisperCtx && m_audioSource) {
+    if (m_settings->autoStartWakeWord() && m_whisperCtx) {
         m_wakeWordActive = true;
         emit wakeWordActiveChanged();
         startListening();
@@ -96,6 +97,7 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
 JarvisAudio::~JarvisAudio()
 {
     stopListening();
+    pw_deinit();
     if (m_rnnoise) {
         rnnoise_destroy(m_rnnoise);
         m_rnnoise = nullptr;
@@ -116,82 +118,44 @@ JarvisAudio::~JarvisAudio()
 
 void JarvisAudio::initAudioCapture()
 {
-    m_mediaDevices = new QMediaDevices(this);
+    pw_init(nullptr, nullptr);
 
-    auto setupAudioDevice = [this]() {
-        const bool wasListening = m_listening.load();
-        if (wasListening) {
-            stopListening();
-        }
+    m_capture = new PwCapture(this);
 
-        delete m_audioSource;
-        m_audioSource = nullptr;
+    connect(m_capture, &PwCapture::audioData, this, [this](const QByteArray &pcm) {
+        QMutexLocker lock(&m_audioMutex);
+        m_audioBuffer.append(pcm);
+    });
 
-        QAudioFormat format;
-        format.setSampleRate(JARVIS_SAMPLE_RATE);
-        format.setChannelCount(1);
-        format.setSampleFormat(QAudioFormat::Int16);
+    connect(m_capture, &PwCapture::audioLevel, this, [this](double level) {
+        m_audioLevel = level;
+        emit audioLevelChanged();
+    });
 
-        const auto defaultDevice = QMediaDevices::defaultAudioInput();
-        if (!defaultDevice.isNull() && defaultDevice.isFormatSupported(format)) {
-            m_audioSource = new QAudioSource(defaultDevice, format, this);
-            m_audioSource->setVolume(1.0);
-            qDebug() << "[JARVIS] Audio capture initialized on:" << defaultDevice.description();
-        } else {
-            qWarning() << "[JARVIS] Default audio input not available or format unsupported.";
-        }
+    connect(m_capture, &PwCapture::connected, this, [this]() {
+        qDebug() << "[JARVIS] PipeWire capture connected";
+    });
 
-        if (wasListening && m_audioSource) {
-            startListening();
-        }
-    };
-
-    setupAudioDevice();
-    connect(m_mediaDevices, &QMediaDevices::audioInputsChanged, this, setupAudioDevice);
+    connect(m_capture, &PwCapture::disconnected, this, [this]() {
+        qDebug() << "[JARVIS] PipeWire capture disconnected, will reconnect";
+    });
 }
 
 void JarvisAudio::startListening()
 {
-    if (!m_audioSource) {
-        qWarning() << "[JARVIS] Cannot start listening: no audio source";
-        return;
-    }
-
     {
         QMutexLocker lock(&m_audioMutex);
         m_audioBuffer.clear();
     }
 
-    if (m_audioDevice) {
-        disconnect(m_audioDevice, nullptr, this, nullptr);
-    }
+    // Start the PipeWire capture if not already running — keep it
+    // running across start/stop cycles to avoid stream churn.
+    if (!m_capture->isRunning())
+        m_capture->start();
 
-    m_audioDevice = m_audioSource->start();
-
-    if (m_audioDevice) {
-        connect(m_audioDevice, &QIODevice::readyRead, this, [this]() {
-            const auto data = m_audioDevice->readAll();
-
-            {
-                QMutexLocker lock(&m_audioMutex);
-                m_audioBuffer.append(data);
-            }
-
-            const auto *samples = reinterpret_cast<const int16_t*>(data.constData());
-            const int numSamples = data.size() / static_cast<int>(sizeof(int16_t));
-            double sum = 0.0;
-            for (int i = 0; i < numSamples; ++i) {
-                sum += qAbs(static_cast<double>(samples[i]));
-            }
-            m_audioLevel = numSamples > 0 ? sum / (numSamples * 32768.0) : 0.0;
-            emit audioLevelChanged();
-        });
-        m_audioProcessTimer->start();
-        if (m_vadCtx) m_vadCheckTimer->start();
-        qDebug() << "[JARVIS] Listening started, audio process timer active";
-    } else {
-        qWarning() << "[JARVIS] Failed to start audio device";
-    }
+    m_audioProcessTimer->start();
+    if (m_vadCtx) m_vadCheckTimer->start();
+    qDebug() << "[JARVIS] Listening started";
 
     m_listening = true;
     emit listeningChanged();
@@ -199,12 +163,10 @@ void JarvisAudio::startListening()
 
 void JarvisAudio::stopListening()
 {
-    if (m_audioSource) {
-        m_audioSource->stop();
-    }
+    // Don't stop the PipeWire capture — just stop processing.
+    // The stream stays alive so we don't get stream churn in PipeWire.
     m_audioProcessTimer->stop();
     m_vadCheckTimer->stop();
-    m_audioDevice = nullptr;
     {
         QMutexLocker lock(&m_audioMutex);
         m_audioBuffer.clear();
@@ -251,8 +213,8 @@ void JarvisAudio::processAudioBuffer()
     QByteArray bufferCopy;
     {
         QMutexLocker lock(&m_audioMutex);
-        // Use 1 second of audio — enough for a wake word, minimal for fast processing
-        const int wakeBufferSize = JARVIS_SAMPLE_RATE * 2; // 1s * 2 bytes/sample
+        // Use 2 seconds of audio for better wake word recognition
+        const int wakeBufferSize = JARVIS_SAMPLE_RATE * 2 * 2; // 2s * 2 bytes/sample
         if (m_audioBuffer.size() < wakeBufferSize) return;
         bufferCopy = m_audioBuffer.right(wakeBufferSize);
         // Keep half the buffer for overlap — prevents missing wake words at boundaries
@@ -307,7 +269,7 @@ QString JarvisAudio::detectWakeWord(const QByteArray &audioData)
     params.no_context       = true;
     params.language         = "en";
     params.n_threads        = std::min(4, static_cast<int>(std::thread::hardware_concurrency()));
-    params.audio_ctx        = 512; // ~1s context, minimal for fast wake word detection
+    params.audio_ctx        = 768; // Wider context for better wake word recognition
     params.suppress_nst     = true;
 
     const int ret = whisper_full(m_whisperCtx, params,
@@ -326,13 +288,38 @@ QString JarvisAudio::detectWakeWord(const QByteArray &audioData)
         QString transcript = QString::fromUtf8(text).toLower().trimmed();
         qDebug() << "[JARVIS] Whisper heard:" << transcript;
 
-        // Check primary wake word
+        // Check primary wake word with fuzzy matching
         const QString wakeWord = m_settings->wakeWord().toLower();
         if (transcript.contains(wakeWord))
             return wakeWord;
+        // Prefix match (e.g. "jarvi" matches "jarvis")
         if (wakeWord.length() >= 3) {
             const QString prefix = wakeWord.left(wakeWord.length() - 1);
             if (transcript.contains(prefix)) return wakeWord;
+        }
+        // Levenshtein fuzzy match: allow edit distance <= 2 for words >= 4 chars
+        if (wakeWord.length() >= 4) {
+            // Extract words from transcript and check each
+            const auto words = transcript.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+            for (const auto &word : words) {
+                const int wLen = wakeWord.length();
+                const int tLen = word.length();
+                // Skip words too different in length
+                if (qAbs(wLen - tLen) > 2) continue;
+
+                // Levenshtein distance
+                QList<int> prev(tLen + 1), curr(tLen + 1);
+                for (int j = 0; j <= tLen; ++j) prev[j] = j;
+                for (int i = 1; i <= wLen; ++i) {
+                    curr[0] = i;
+                    for (int j = 1; j <= tLen; ++j) {
+                        int cost = (wakeWord[i - 1] == word[j - 1]) ? 0 : 1;
+                        curr[j] = std::min({prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost});
+                    }
+                    std::swap(prev, curr);
+                }
+                if (prev[tLen] <= 2) return wakeWord;
+            }
         }
 
         // Check provider wake words (e.g. "claude", "gemini", "ollama")
@@ -598,7 +585,7 @@ void JarvisAudio::ensureModelsDownloaded()
             emit modelDownloadStatus(QStringLiteral("Models ready."));
 
             // Auto-start wake word if configured
-            if (m_settings->autoStartWakeWord() && m_whisperCtx && m_audioSource) {
+            if (m_settings->autoStartWakeWord() && m_whisperCtx && m_capture) {
                 m_wakeWordActive = true;
                 emit wakeWordActiveChanged();
                 startListening();
@@ -667,7 +654,7 @@ std::vector<float> JarvisAudio::pcm16ToFloat(const QByteArray &audioData) const
 void JarvisAudio::startVoiceCommand()
 {
     if (m_micMonitor && m_micMonitor->isMicBusy()) return;
-    if (!m_whisperCtx || !m_audioSource) return;
+    if (!m_whisperCtx || !m_capture) return;
 
     m_voiceCommandMode = true;
     emit voiceCommandModeChanged();
@@ -746,6 +733,7 @@ void JarvisAudio::toggleWakeWord()
         startListening();
     } else {
         stopListening();
+        m_capture->stop(); // Fully release the PipeWire stream
     }
 }
 

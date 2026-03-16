@@ -65,6 +65,7 @@ private:
     // Native libpiper support
     struct piper_synthesizer *m_piperSynth{nullptr};
     QProcess *m_playProc{nullptr};
+    QProcess *m_draining{nullptr};  // pw-cat finishing playback of last chunk
     bool m_useLibPiper{false};
 
     void initLibPiper();

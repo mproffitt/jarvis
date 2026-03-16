@@ -1,10 +1,6 @@
 #pragma once
 
 #include <QObject>
-#include <QAudioSource>
-#include <QAudioFormat>
-#include <QMediaDevices>
-#include <QIODevice>
 #include <QTimer>
 #include <QMutex>
 #include <QByteArray>
@@ -19,6 +15,7 @@
 
 class JarvisSettings;
 class MicMonitor;
+class PwCapture;
 
 class JarvisAudio : public QObject
 {
@@ -82,14 +79,11 @@ private:
 
     JarvisSettings *m_settings{nullptr};
 
-    QMediaDevices *m_mediaDevices{nullptr};
-    QAudioSource *m_audioSource{nullptr};
-    QIODevice *m_audioDevice{nullptr};
+    PwCapture *m_capture{nullptr};
     QTimer *m_audioProcessTimer{nullptr};
     QTimer *m_voiceCmdTimer{nullptr};
     QTimer *m_silenceTimer{nullptr};
     QTimer *m_vadCheckTimer{nullptr};
-    QByteArray m_vadBuffer; // Small rolling buffer for fast VAD checks
     QByteArray m_audioBuffer;
     QMutex m_audioMutex;
 
