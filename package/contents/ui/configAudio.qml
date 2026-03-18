@@ -11,19 +11,11 @@ Item {
     height: parent ? parent.height : 0
     clip: true
 
-    ScrollView {
-        id: audioScrollView
-        anchors.fill: parent
-        contentWidth: availableWidth
-
     ColumnLayout {
-        id: audioPage
-        width: audioScrollView.availableWidth
+        anchors.fill: parent
         spacing: 0
 
-        // ════════════════════════════════════════
-        // WAKE WORD & AUDIO
-        // ════════════════════════════════════════
+        // ── Fixed top: settings ──
         Kirigami.FormLayout {
             Component.onCompleted: { for (var i = 0; i < children.length; i++) { if (children[i].hasOwnProperty("columns")) { children[i].anchors.horizontalCenter = undefined; children[i].anchors.left = left; children[i].anchors.leftMargin = Qt.binding(function() { return Kirigami.Units.smallSpacing; }); } } }
             Layout.fillWidth: true
@@ -56,90 +48,98 @@ Item {
                 font.bold: true
             }
 
-            CheckBox {
-                Kirigami.FormData.label: i18n("GPU acceleration:")
-                checked: JarvisBackend.whisperGpu
-                onToggled: JarvisBackend.setWhisperGpu(checked)
-            }
+            GridLayout {
+                columns: 2
+                columnSpacing: Kirigami.Units.largeSpacing * 2
+                rowSpacing: Kirigami.Units.smallSpacing
 
-            CheckBox {
-                Kirigami.FormData.label: i18n("Auto-start wake word detection:")
-                checked: JarvisBackend.autoStartWakeWord
-                onToggled: JarvisBackend.setAutoStartWakeWord(checked)
-            }
-
-            CheckBox {
-                Kirigami.FormData.label: i18n("Noise suppression (RNNoise):")
-                checked: JarvisBackend.noiseSuppression
-                onToggled: JarvisBackend.setNoiseSuppression(checked)
-            }
-
-            CheckBox {
-                Kirigami.FormData.label: i18n("Continuous conversation mode:")
-                checked: JarvisBackend.continuousMode
-                onToggled: JarvisBackend.setContinuousMode(checked)
+                CheckBox {
+                    text: i18n("GPU acceleration")
+                    checked: JarvisBackend.whisperGpu
+                    onToggled: JarvisBackend.setWhisperGpu(checked)
+                }
+                CheckBox {
+                    text: i18n("Auto-start wake word")
+                    checked: JarvisBackend.autoStartWakeWord
+                    onToggled: JarvisBackend.setAutoStartWakeWord(checked)
+                }
+                CheckBox {
+                    text: i18n("Noise suppression (RNNoise)")
+                    checked: JarvisBackend.noiseSuppression
+                    onToggled: JarvisBackend.setNoiseSuppression(checked)
+                }
+                CheckBox {
+                    text: i18n("Continuous conversation")
+                    checked: JarvisBackend.continuousMode
+                    onToggled: JarvisBackend.setContinuousMode(checked)
+                }
             }
 
             Label {
                 visible: JarvisBackend.continuousMode
-                text: i18n("After the wake word, the mic stays open for back-and-forth conversation. Say \"stop\", \"goodbye\", or \"thank you\" to end.")
+                text: i18n("Continuous mode: mic stays open after wake word. Say \"stop\" or \"goodbye\" to end.")
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
                 color: Kirigami.Theme.disabledTextColor
                 font.pointSize: Kirigami.Theme.smallFont.pointSize
             }
-
-            Label {
-                text: i18n("Say the wake word to activate voice commands without clicking.")
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-                color: Kirigami.Theme.disabledTextColor
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-            }
-
         }
 
-        // Whisper model browser
+        // ── Whisper model header ──
         Kirigami.Separator { Layout.fillWidth: true; Layout.topMargin: Kirigami.Units.largeSpacing }
         Label { text: i18n("Available Whisper Models"); font.bold: true; Layout.leftMargin: Kirigami.Units.largeSpacing; Layout.topMargin: Kirigami.Units.smallSpacing }
         Component.onCompleted: JarvisBackend.fetchWhisperModels()
-        Repeater {
-            model: JarvisBackend.whisperModelList
-            delegate: Kirigami.AbstractCard {
-                Layout.fillWidth: true; Layout.leftMargin: Kirigami.Units.smallSpacing; Layout.rightMargin: Kirigami.Units.smallSpacing
-                contentItem: RowLayout {
-                    spacing: Kirigami.Units.smallSpacing
-                    Label { text: modelData.name; font.bold: true }
-                    Label { text: modelData.size; color: Kirigami.Theme.disabledTextColor; font.pointSize: Kirigami.Theme.smallFont.pointSize }
-                    Item { Layout.fillWidth: true }
-                    Label {
-                        visible: modelData.installed && modelData.file === ("ggml-" + JarvisBackend.whisperModel + ".bin")
-                        text: i18n("In use")
-                        color: Kirigami.Theme.positiveTextColor
-                        font.pointSize: Kirigami.Theme.smallFont.pointSize
-                    }
-                    Button {
-                        visible: !modelData.installed || modelData.file !== ("ggml-" + JarvisBackend.whisperModel + ".bin")
-                        text: modelData.installed ? i18n("Use") : i18n("Download")
-                        icon.name: modelData.installed ? "dialog-ok-apply" : "download"
-                        enabled: !JarvisBackend.downloading
-                        onClicked: {
-                            if (modelData.installed) {
-                                var name = modelData.file.replace("ggml-", "").replace(".bin", "")
-                                JarvisBackend.setWhisperModel(name)
-                            } else {
-                                JarvisBackend.downloadWhisperModel(modelData.file)
+
+        // ── Scrollable whisper model cards ──
+        ScrollView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+
+            ListView {
+                id: whisperListView
+                clip: true
+                spacing: Kirigami.Units.smallSpacing
+                model: JarvisBackend.whisperModelList
+
+                delegate: Kirigami.AbstractCard {
+                    width: whisperListView.width - Kirigami.Units.smallSpacing * 2
+                    x: Kirigami.Units.smallSpacing
+
+                    contentItem: RowLayout {
+                        spacing: Kirigami.Units.smallSpacing
+                        Label { text: modelData.name; font.bold: true }
+                        Label { text: modelData.size; color: Kirigami.Theme.disabledTextColor; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+                        Item { Layout.fillWidth: true }
+                        Label {
+                            visible: modelData.installed && modelData.file === ("ggml-" + JarvisBackend.whisperModel + ".bin")
+                            text: i18n("In use")
+                            color: Kirigami.Theme.positiveTextColor
+                            font.pointSize: Kirigami.Theme.smallFont.pointSize
+                        }
+                        Button {
+                            visible: !modelData.installed || modelData.file !== ("ggml-" + JarvisBackend.whisperModel + ".bin")
+                            text: modelData.installed ? i18n("Use") : i18n("Download")
+                            icon.name: modelData.installed ? "dialog-ok-apply" : "download"
+                            enabled: !JarvisBackend.downloading
+                            onClicked: {
+                                if (modelData.installed) {
+                                    var name = modelData.file.replace("ggml-", "").replace(".bin", "")
+                                    JarvisBackend.setWhisperModel(name)
+                                } else {
+                                    JarvisBackend.downloadWhisperModel(modelData.file)
+                                }
                             }
                         }
                     }
                 }
             }
         }
+
+        // ── Fixed bottom: download progress + sliders ──
         ProgressBar { visible: JarvisBackend.downloading; value: JarvisBackend.downloadProgress; Layout.fillWidth: true; Layout.leftMargin: Kirigami.Units.largeSpacing; Layout.rightMargin: Kirigami.Units.largeSpacing }
         Label { visible: JarvisBackend.downloading; text: JarvisBackend.downloadStatus; Layout.leftMargin: Kirigami.Units.largeSpacing; color: Kirigami.Theme.disabledTextColor; font.pointSize: Kirigami.Theme.smallFont.pointSize }
         Kirigami.Separator { Layout.fillWidth: true; Layout.topMargin: Kirigami.Units.largeSpacing }
 
-        // Sliders outside FormLayout for full width
         Label {
             text: i18n("Max voice command length: %1 seconds").arg(voiceCmdSlider.value.toFixed(0))
             Layout.leftMargin: Kirigami.Units.largeSpacing
@@ -175,12 +175,9 @@ Item {
             Layout.fillWidth: true
             Layout.leftMargin: Kirigami.Units.largeSpacing
             Layout.rightMargin: Kirigami.Units.largeSpacing
+            Layout.bottomMargin: Kirigami.Units.largeSpacing
             color: Kirigami.Theme.disabledTextColor
             font.pointSize: Kirigami.Theme.smallFont.pointSize
         }
-
-        // Bottom spacer
-        Item { Layout.preferredHeight: Kirigami.Units.largeSpacing }
-    }
     }
 }

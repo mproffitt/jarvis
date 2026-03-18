@@ -13,6 +13,9 @@ PlasmoidItem {
     compactRepresentation: compactRep
     Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
 
+    Component.onCompleted: JarvisBackend.resume()
+    Component.onDestruction: JarvisBackend.shutdown()
+
     readonly property color cyanPrimary:   "#4dc9f6"
     readonly property color cyanDim:       "#1a5a7a"
     readonly property color cyanGlow:      "#2aaad4"

@@ -12,14 +12,9 @@ Item {
     height: parent ? parent.height : 0
     clip: true
 
-    ScrollView {
-        id: chatScrollView
-        anchors.fill: parent
-        contentWidth: availableWidth
-
     ColumnLayout {
         id: chatPage
-        width: chatScrollView.availableWidth
+        anchors.fill: parent
         spacing: 0
 
         // ════════════════════════════════════════
@@ -124,7 +119,7 @@ Item {
         }
 
         // ════════════════════════════════════════
-        // PERSONALITY
+        // SYSTEM PROMPT
         // ════════════════════════════════════════
         Kirigami.FormLayout {
             Component.onCompleted: { for (var i = 0; i < children.length; i++) { if (children[i].hasOwnProperty("columns")) { children[i].anchors.horizontalCenter = undefined; children[i].anchors.left = left; children[i].anchors.leftMargin = Qt.binding(function() { return Kirigami.Units.smallSpacing; }); } } }
@@ -132,36 +127,87 @@ Item {
 
             Kirigami.Separator {
                 Kirigami.FormData.isSection: true
-                Kirigami.FormData.label: i18n("AI Personality")
+                Kirigami.FormData.label: i18n("System Prompt")
+            }
+
+            RowLayout {
+                Kirigami.FormData.label: i18n("Mode:")
+                spacing: Kirigami.Units.largeSpacing
+
+                ButtonGroup { id: promptModeGroup }
+
+                RadioButton {
+                    text: i18n("Default")
+                    ButtonGroup.group: promptModeGroup
+                    checked: JarvisBackend.systemPromptMode === "default"
+                    onClicked: JarvisBackend.setSystemPromptMode("default")
+                }
+                RadioButton {
+                    text: i18n("None")
+                    ButtonGroup.group: promptModeGroup
+                    checked: JarvisBackend.systemPromptMode === "none"
+                    onClicked: JarvisBackend.setSystemPromptMode("none")
+                }
+                RadioButton {
+                    text: i18n("Custom")
+                    ButtonGroup.group: promptModeGroup
+                    checked: JarvisBackend.systemPromptMode === "custom"
+                    onClicked: JarvisBackend.setSystemPromptMode("custom")
+                }
             }
 
             Label {
-                text: i18n("Customize the system prompt to change how J.A.R.V.I.S. behaves. Leave empty for the default J.A.R.V.I.S. personality.")
+                visible: JarvisBackend.systemPromptMode === "default"
+                text: i18n("Uses the built-in J.A.R.V.I.S. personality — polite, witty, British humor.")
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
                 color: Kirigami.Theme.disabledTextColor
                 font.pointSize: Kirigami.Theme.smallFont.pointSize
             }
 
-            TextArea {
-                id: personalityField
-                Kirigami.FormData.label: i18n("System prompt:")
-                text: JarvisBackend.personalityPrompt
-                placeholderText: i18n("Default: J.A.R.V.I.S. from Iron Man — polite, witty, British humor...")
+            Label {
+                visible: JarvisBackend.systemPromptMode === "none"
+                text: i18n("No personality prompt is sent. The model uses its own default behavior.")
+                wrapMode: Text.Wrap
                 Layout.fillWidth: true
-                Layout.preferredHeight: 120
-                wrapMode: TextEdit.Wrap
+                color: Kirigami.Theme.disabledTextColor
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
             }
 
-            Button {
-                text: i18n("Save Personality")
-                icon.name: "document-save"
-                onClicked: JarvisBackend.setPersonalityPrompt(personalityField.text)
+        }
+
+        // TextArea outside FormLayout so Layout.fillHeight works
+        ScrollView {
+            id: promptScrollView
+            property bool isCustom: JarvisBackend.systemPromptMode === "custom"
+            visible: isCustom
+            Layout.fillWidth: true
+            Layout.fillHeight: isCustom
+            Layout.preferredHeight: isCustom ? -1 : 0
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.rightMargin: Kirigami.Units.largeSpacing
+
+            TextArea {
+                id: personalityField
+                text: JarvisBackend.personalityPrompt
+                placeholderText: i18n("You are a helpful assistant...")
+                wrapMode: TextEdit.Wrap
             }
         }
 
-        // Bottom spacer
-        Item { Layout.preferredHeight: Kirigami.Units.largeSpacing }
-    }
+        Button {
+            visible: JarvisBackend.systemPromptMode === "custom"
+            text: i18n("Save Prompt")
+            icon.name: "document-save"
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.bottomMargin: Kirigami.Units.largeSpacing
+            onClicked: JarvisBackend.setPersonalityPrompt(personalityField.text)
+        }
+
+        // Push content up when textarea is hidden
+        Item {
+            visible: JarvisBackend.systemPromptMode !== "custom"
+            Layout.fillHeight: true
+        }
     }
 }

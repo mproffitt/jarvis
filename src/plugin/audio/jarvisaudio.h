@@ -34,6 +34,8 @@ public:
 
     void toggleWakeWord();
     void reloadWhisperModel();
+    void stopStreams();
+    void restartStreams();
     void startVoiceCommand();
     void stopVoiceCommand();
     void setTtsSpeaking(bool speaking);

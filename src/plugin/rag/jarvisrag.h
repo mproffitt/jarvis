@@ -5,6 +5,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
+#include <QVector>
 
 #include <KFileMetaData/ExtractorCollection>
 
@@ -36,7 +37,11 @@ private:
     /// Find the most relevant chunk within a file's text for the given query.
     [[nodiscard]] static QString findRelevantChunk(const QString &text, const QString &query, int maxChars);
 
+    /// Fetch embedding vectors from Ollama for a batch of texts.
+    [[nodiscard]] QList<QVector<float>> fetchEmbeddings(const QStringList &texts) const;
+
     JarvisSettings *m_settings{nullptr};
     KFileMetaData::ExtractorCollection m_extractorCollection;
     mutable QHash<QString, QString> m_textCache;
+    mutable QHash<QString, QString> m_chunkCache;
 };

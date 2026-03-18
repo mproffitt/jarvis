@@ -96,6 +96,7 @@ class JarvisBackend : public QObject
     Q_PROPERTY(QVariantList whisperModelList READ whisperModelList NOTIFY whisperModelListChanged)
     Q_PROPERTY(QString wakeWord READ wakeWord NOTIFY wakeWordChanged)
     Q_PROPERTY(QString personalityPrompt READ personalityPrompt NOTIFY personalityPromptChanged)
+    Q_PROPERTY(QString systemPromptMode READ systemPromptMode NOTIFY systemPromptModeChanged)
 
     // Commands
     Q_PROPERTY(QVariantList commandMappings READ commandMappings NOTIFY commandMappingsChanged)
@@ -181,6 +182,7 @@ public:
     [[nodiscard]] QVariantList whisperModelList() const { return m_whisperModelList; }
     [[nodiscard]] QString wakeWord() const;
     [[nodiscard]] QString personalityPrompt() const;
+    [[nodiscard]] QString systemPromptMode() const;
 
     // Continuous conversation
     [[nodiscard]] bool continuousMode() const { return m_continuousMode; }
@@ -204,6 +206,8 @@ public:
     Q_INVOKABLE void exportHistory(const QString &path);
     Q_INVOKABLE void importHistory(const QString &path);
     Q_INVOKABLE void checkConnection();
+    Q_INVOKABLE void shutdown();
+    Q_INVOKABLE void resume();
 
     // Voice command
     Q_INVOKABLE void startVoiceCommand();
@@ -251,6 +255,7 @@ public:
     Q_INVOKABLE void setFastModelId(const QString &modelId);
     Q_INVOKABLE void stopConversation();
     Q_INVOKABLE void setPersonalityPrompt(const QString &prompt);
+    Q_INVOKABLE void setSystemPromptMode(const QString &mode);
     Q_INVOKABLE void cancelDownload();
     Q_INVOKABLE void openUrl(const QString &url);
     Q_INVOKABLE void testVoice(const QString &voiceId);
@@ -313,6 +318,7 @@ signals:
     void whisperModelListChanged();
     void wakeWordChanged();
     void personalityPromptChanged();
+    void systemPromptModeChanged();
     void continuousModeChanged();
     void smartRoutingChanged();
     void fastModelIdChanged();
@@ -364,8 +370,11 @@ private:
         "- Keep responses short and natural — this is a voice interface, not a text chat\n"
         "- Be witty when appropriate but don't force it\n"
         "- Respond in the same language the user speaks to you\n"
-        "- When reporting system stats, keep it brief and clear\n\n"
-        "SYSTEM INTERACTION CAPABILITIES:\n"
+        "- When reporting system stats, keep it brief and clear\n";
+
+    // ACTION blocks — only used for llama.cpp which lacks native tool calling
+    static constexpr auto JARVIS_ACTION_PROMPT =
+        "\nSYSTEM INTERACTION CAPABILITIES:\n"
         "You can interact with the Linux system by including ACTION blocks in your response.\n"
         "Put your spoken response FIRST, then any actions at the END.\n"
         "Actions are in this exact format (one per line):\n\n"
@@ -451,6 +460,7 @@ private:
     QString m_currentUserMessage; // Original message before RAG modification
 
     // Continuous conversation
+    bool m_shutDown{false};
     bool m_continuousMode{false};
     bool m_conversationActive{false};
     QStringList m_whisperLog;

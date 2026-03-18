@@ -97,6 +97,11 @@ JarvisAudio::JarvisAudio(JarvisSettings *settings, QObject *parent)
 JarvisAudio::~JarvisAudio()
 {
     stopListening();
+
+    // Stop PipeWire threads before tearing down the library
+    if (m_capture) m_capture->stop();
+    if (m_micMonitor) m_micMonitor->stop();
+
     pw_deinit();
     if (m_rnnoise) {
         rnnoise_destroy(m_rnnoise);
@@ -110,6 +115,28 @@ JarvisAudio::~JarvisAudio()
         whisper_free(m_whisperCtx);
         m_whisperCtx = nullptr;
     }
+}
+
+void JarvisAudio::stopStreams()
+{
+    stopListening();
+    if (m_capture) m_capture->stop();
+    if (m_micMonitor) m_micMonitor->stop();
+    qDebug() << "[JARVIS] Audio streams stopped";
+}
+
+void JarvisAudio::restartStreams()
+{
+    if (m_capture && !m_capture->isRunning())
+        m_capture->start();
+    if (m_micMonitor)
+        m_micMonitor->start();
+    if (m_settings->autoStartWakeWord() && m_whisperCtx) {
+        m_wakeWordActive = true;
+        emit wakeWordActiveChanged();
+        startListening();
+    }
+    qDebug() << "[JARVIS] Audio streams restarted";
 }
 
 // ─────────────────────────────────────────────
@@ -605,7 +632,7 @@ void JarvisAudio::ensureModelsDownloaded()
     const QString whisperDest = dataDir + QStringLiteral("/") + whisperFile;
 
     const QString vadUrl = QStringLiteral(
-        "https://github.com/ggerganov/whisper.cpp/raw/master/models/silero-vad.onnx");
+        "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin");
     const QString vadDest = dataDir + QStringLiteral("/silero-vad.onnx");
 
     const bool needWhisper = findWhisperModel().isEmpty();

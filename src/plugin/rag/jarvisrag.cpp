@@ -2,11 +2,19 @@
 #include "../settings/jarvissettings.h"
 
 #include <QDir>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QDebug>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMimeDatabase>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QRegularExpression>
+#include <QTimer>
 
 #include <Baloo/Query>
 #include <Baloo/ResultIterator>
@@ -17,6 +25,19 @@
 
 #include <cmath>
 
+static float cosineSimilarity(const QVector<float> &a, const QVector<float> &b)
+{
+    if (a.size() != b.size() || a.isEmpty()) return 0.0f;
+    float dot = 0.0f, normA = 0.0f, normB = 0.0f;
+    for (int i = 0; i < a.size(); ++i) {
+        dot   += a[i] * b[i];
+        normA += a[i] * a[i];
+        normB += b[i] * b[i];
+    }
+    const float denom = std::sqrt(normA) * std::sqrt(normB);
+    return denom > 0.0f ? dot / denom : 0.0f;
+}
+
 JarvisRag::JarvisRag(JarvisSettings *settings, QObject *parent)
     : QObject(parent)
     , m_settings(settings)
@@ -26,19 +47,47 @@ JarvisRag::JarvisRag(JarvisSettings *settings, QObject *parent)
 const QStringList &JarvisRag::stopWords()
 {
     static const QStringList words = {
+        // Articles, prepositions, pronouns
         QStringLiteral("the"), QStringLiteral("a"), QStringLiteral("an"), QStringLiteral("is"),
-        QStringLiteral("are"), QStringLiteral("was"), QStringLiteral("what"), QStringLiteral("how"),
-        QStringLiteral("does"), QStringLiteral("do"), QStringLiteral("in"), QStringLiteral("of"),
-        QStringLiteral("to"), QStringLiteral("for"), QStringLiteral("my"), QStringLiteral("me"),
-        QStringLiteral("about"), QStringLiteral("from"), QStringLiteral("that"), QStringLiteral("this"),
-        QStringLiteral("file"), QStringLiteral("document"), QStringLiteral("find"),
-        QStringLiteral("search"), QStringLiteral("look"), QStringLiteral("read"),
-        QStringLiteral("tell"), QStringLiteral("show"), QStringLiteral("give"),
-        QStringLiteral("say"), QStringLiteral("says"), QStringLiteral("talk"),
-        QStringLiteral("know"), QStringLiteral("think"),
-        QStringLiteral("please"), QStringLiteral("can"), QStringLiteral("you"),
-        QStringLiteral("just"), QStringLiteral("some"), QStringLiteral("like"),
+        QStringLiteral("are"), QStringLiteral("was"), QStringLiteral("were"), QStringLiteral("been"),
+        QStringLiteral("being"), QStringLiteral("have"), QStringLiteral("has"), QStringLiteral("had"),
+        QStringLiteral("does"), QStringLiteral("do"), QStringLiteral("did"), QStringLiteral("will"),
+        QStringLiteral("would"), QStringLiteral("could"), QStringLiteral("should"), QStringLiteral("shall"),
+        QStringLiteral("might"), QStringLiteral("must"), QStringLiteral("may"),
+        QStringLiteral("in"), QStringLiteral("of"), QStringLiteral("to"), QStringLiteral("for"),
+        QStringLiteral("with"), QStringLiteral("at"), QStringLiteral("by"), QStringLiteral("on"),
+        QStringLiteral("from"), QStringLiteral("into"), QStringLiteral("through"), QStringLiteral("between"),
+        QStringLiteral("but"), QStringLiteral("and"), QStringLiteral("or"), QStringLiteral("not"),
+        QStringLiteral("no"), QStringLiteral("nor"), QStringLiteral("so"), QStringLiteral("yet"),
+        QStringLiteral("my"), QStringLiteral("me"), QStringLiteral("you"), QStringLiteral("your"),
+        QStringLiteral("he"), QStringLiteral("she"), QStringLiteral("it"), QStringLiteral("its"),
+        QStringLiteral("we"), QStringLiteral("they"), QStringLiteral("them"), QStringLiteral("their"),
+        QStringLiteral("our"), QStringLiteral("his"), QStringLiteral("her"),
+        // Question words, conversational
+        QStringLiteral("what"), QStringLiteral("how"), QStringLiteral("why"), QStringLiteral("when"),
+        QStringLiteral("where"), QStringLiteral("which"), QStringLiteral("who"), QStringLiteral("whom"),
+        QStringLiteral("that"), QStringLiteral("this"), QStringLiteral("these"), QStringLiteral("those"),
+        QStringLiteral("about"), QStringLiteral("there"), QStringLiteral("here"), QStringLiteral("than"),
+        // Common verbs that don't indicate file relevance
+        QStringLiteral("tell"), QStringLiteral("show"), QStringLiteral("give"), QStringLiteral("get"),
+        QStringLiteral("make"), QStringLiteral("take"), QStringLiteral("come"), QStringLiteral("go"),
+        QStringLiteral("say"), QStringLiteral("says"), QStringLiteral("said"), QStringLiteral("talk"),
+        QStringLiteral("know"), QStringLiteral("think"), QStringLiteral("want"), QStringLiteral("need"),
+        QStringLiteral("feel"), QStringLiteral("see"), QStringLiteral("look"), QStringLiteral("find"),
+        QStringLiteral("use"), QStringLiteral("try"), QStringLiteral("ask"), QStringLiteral("work"),
+        QStringLiteral("call"), QStringLiteral("keep"), QStringLiteral("let"), QStringLiteral("put"),
+        QStringLiteral("run"), QStringLiteral("set"), QStringLiteral("turn"), QStringLiteral("help"),
+        QStringLiteral("start"), QStringLiteral("stop"), QStringLiteral("move"),
+        // Filler / conversational
+        QStringLiteral("please"), QStringLiteral("can"), QStringLiteral("just"), QStringLiteral("some"),
+        QStringLiteral("like"), QStringLiteral("also"), QStringLiteral("well"), QStringLiteral("very"),
+        QStringLiteral("really"), QStringLiteral("much"), QStringLiteral("more"), QStringLiteral("most"),
+        QStringLiteral("only"), QStringLiteral("even"), QStringLiteral("still"), QStringLiteral("already"),
+        QStringLiteral("ever"), QStringLiteral("never"), QStringLiteral("always"), QStringLiteral("often"),
+        QStringLiteral("maybe"), QStringLiteral("probably"), QStringLiteral("actually"),
+        // Commands that shouldn't trigger file search
         QStringLiteral("play"), QStringLiteral("open"), QStringLiteral("hey"),
+        QStringLiteral("file"), QStringLiteral("document"), QStringLiteral("search"), QStringLiteral("read"),
     };
     return words;
 }
@@ -58,7 +107,7 @@ QStringList JarvisRag::extractSearchTerms(const QString &query)
 QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCharsPerFile) const
 {
     const QStringList searchTerms = extractSearchTerms(query);
-    if (searchTerms.isEmpty()) return {};
+    if (searchTerms.size() < 2) return {};  // Need at least 2 meaningful terms to avoid noise
 
     const QString searchString = searchTerms.join(QLatin1Char(' '));
     qDebug() << "[JARVIS] RAG search:" << searchString;
@@ -210,19 +259,68 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
     // A single common word matching a few times in a large file is noise.
     // Require at least 2 distinct search terms to match, or a high score
     // from concentrated matches of a single distinctive term.
-    constexpr double minContentScore = 0.5;
+    constexpr double minContentScore = 1.0;
+
+    // Filter by minimum content score for Stage 3
+    QList<ContentScore> passedContent;
+    for (const auto &cs : contentRanked) {
+        if (cs.score < minContentScore) break; // Sorted
+        passedContent.append(cs);
+    }
+
+    // Stage 3: Embedding-based re-ranking via Ollama
+    m_chunkCache.clear();
+    const QString embeddingModel = m_settings->embeddingModel();
+    if (!embeddingModel.isEmpty() && passedContent.size() > 1) {
+        constexpr int maxEmbedCandidates = 10;
+        const int embedCount = std::min(passedContent.size(), static_cast<qsizetype>(maxEmbedCandidates));
+
+        // Build texts: query at index 0, candidate chunks at 1..N
+        QStringList embedTexts;
+        embedTexts.append(query);
+        for (int i = 0; i < embedCount; ++i) {
+            const QString &filePath = passedContent[i].path;
+            const QString &text = m_textCache.contains(filePath)
+                ? m_textCache[filePath]
+                : (m_textCache[filePath] = extractFileText(filePath, maxCharsPerFile * 2));
+            QString chunk = findRelevantChunk(text, searchString, maxCharsPerFile);
+            m_chunkCache[filePath] = chunk;
+            // Truncate chunk for embedding to keep request size reasonable
+            embedTexts.append(chunk.left(2000));
+        }
+
+        const auto embeddings = fetchEmbeddings(embedTexts);
+        if (embeddings.size() == embedTexts.size()) {
+            const auto &queryEmbed = embeddings[0];
+            for (int i = 0; i < embedCount; ++i) {
+                float sim = cosineSimilarity(queryEmbed, embeddings[i + 1]);
+                qDebug() << "[JARVIS] RAG: embedding score" << passedContent[i].path
+                         << "sim=" << sim;
+                // Replace content score with cosine similarity for re-ranking
+                passedContent[i].score = sim;
+            }
+            // Re-sort by embedding similarity
+            std::sort(passedContent.begin(), passedContent.begin() + embedCount,
+                      [](const auto &a, const auto &b) { return a.score > b.score; });
+        } else {
+            qWarning() << "[JARVIS] RAG: embedding fetch failed, keeping term-frequency ranking";
+        }
+    }
+
     QString context;
     int fileCount = 0;
-    for (const auto &[score, filePath] : contentRanked) {
+    for (const auto &[score, filePath] : passedContent) {
         if (fileCount >= maxFiles) break;
-        if (score < minContentScore) break; // Sorted, so all remaining are worse
 
         const QString &text = m_textCache.contains(filePath)
             ? m_textCache[filePath]
             : (m_textCache[filePath] = extractFileText(filePath, maxCharsPerFile * 2));
         if (text.isEmpty()) continue;
 
-        const QString chunk = findRelevantChunk(text, searchString, maxCharsPerFile);
+        // Use cached chunk from embedding stage if available
+        const QString chunk = m_chunkCache.contains(filePath)
+            ? m_chunkCache[filePath]
+            : findRelevantChunk(text, searchString, maxCharsPerFile);
         if (chunk.trimmed().isEmpty()) continue;
 
         context += QStringLiteral("\n--- File: %1 ---\n%2\n").arg(filePath, chunk);
@@ -230,6 +328,7 @@ QString JarvisRag::retrieveContext(const QString &query, int maxFiles, int maxCh
     }
 
     m_textCache.clear();
+    m_chunkCache.clear();
 
     if (context.isEmpty()) {
         qDebug() << "[JARVIS] RAG: no relevant files found";
@@ -355,4 +454,75 @@ QString JarvisRag::findRelevantChunk(const QString &text, const QString &query, 
     }
 
     return chunk;
+}
+
+QList<QVector<float>> JarvisRag::fetchEmbeddings(const QStringList &texts) const
+{
+    if (texts.isEmpty()) return {};
+
+    const QString model = m_settings->embeddingModel();
+    const QString serverUrl = m_settings->embeddingServerUrl();
+    if (model.isEmpty() || serverUrl.isEmpty()) return {};
+
+    // Build request payload: {"model": "...", "input": ["...", ...]}
+    QJsonArray inputArray;
+    for (const auto &t : texts)
+        inputArray.append(t);
+
+    QJsonObject payload;
+    payload[QStringLiteral("model")] = model;
+    payload[QStringLiteral("input")] = inputArray;
+
+    const QUrl url(serverUrl + QStringLiteral("/api/embed"));
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+
+    // Thread-local QNAM since RAG runs in QtConcurrent::run
+    thread_local QNetworkAccessManager nam;
+    QNetworkReply *reply = nam.post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
+
+    // Block with event loop + timeout
+    QEventLoop loop;
+    QTimer timer;
+    timer.setSingleShot(true);
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timer.start(5000);
+    loop.exec();
+
+    QList<QVector<float>> result;
+
+    if (!reply->isFinished()) {
+        reply->abort();
+        reply->deleteLater();
+        qWarning() << "[JARVIS] RAG: embedding request timed out";
+        return result;
+    }
+
+    if (reply->error() != QNetworkReply::NoError) {
+        qWarning() << "[JARVIS] RAG: embedding request failed:" << reply->errorString();
+        reply->deleteLater();
+        return result;
+    }
+
+    const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+    reply->deleteLater();
+
+    const QJsonArray embeddings = doc.object()[QStringLiteral("embeddings")].toArray();
+    if (embeddings.size() != texts.size()) {
+        qWarning() << "[JARVIS] RAG: embedding count mismatch, expected"
+                    << texts.size() << "got" << embeddings.size();
+        return result;
+    }
+
+    result.reserve(embeddings.size());
+    for (const auto &embVal : embeddings) {
+        const QJsonArray vec = embVal.toArray();
+        QVector<float> embedding(vec.size());
+        for (int i = 0; i < vec.size(); ++i)
+            embedding[i] = static_cast<float>(vec[i].toDouble());
+        result.append(std::move(embedding));
+    }
+
+    return result;
 }

@@ -30,6 +30,8 @@ public:
     void speak(const QString &text);
     void speakSentence(const QString &sentence);
     void stop();
+    void stopStreams();
+    void restartStream();
     void toggleMute();
 
     // Called when settings change

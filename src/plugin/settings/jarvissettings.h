@@ -68,10 +68,15 @@ public:
     [[nodiscard]] bool smartRouting() const { return m_smartRouting; }
     [[nodiscard]] QString fastModelId() const { return m_fastModelId; }
     [[nodiscard]] QString personalityPrompt() const { return m_personalityPrompt; }
+    [[nodiscard]] QString systemPromptMode() const { return m_systemPromptMode; }
     [[nodiscard]] double ttsRate() const { return m_ttsRate; }
     [[nodiscard]] double ttsPitch() const { return m_ttsPitch; }
     [[nodiscard]] double ttsVolume() const { return m_ttsVolume; }
     [[nodiscard]] bool ttsMuted() const { return m_ttsMuted; }
+    [[nodiscard]] bool currentModelSupportsTools() const;
+    void probeModelToolSupport(const QString &modelName);
+    [[nodiscard]] QString embeddingModel() const { return m_embeddingModel; }
+    [[nodiscard]] QString embeddingServerUrl() const { return m_embeddingServerUrl; }
 
     // Setters
     void setLlmServerUrl(const QString &url);
@@ -94,10 +99,13 @@ public:
     void setFastModelId(const QString &modelId);
     [[nodiscard]] QString routeModel(const QString &query) const;
     void setPersonalityPrompt(const QString &prompt);
+    void setSystemPromptMode(const QString &mode);
     void setTtsRate(double rate);
     void setTtsPitch(double pitch);
     void setTtsVolume(double volume);
     void setTtsMuted(bool muted);
+    void setEmbeddingModel(const QString &model);
+    void setEmbeddingServerUrl(const QString &url);
 
     // Downloads
     void downloadLlmModel(const QString &modelId);
@@ -120,6 +128,7 @@ public:
     void fetchPiperVoices(const QString &langFilter = {}, const QString &qualityFilter = {});
     void fetchCommunityVoices();
     void fetchOllamaModels();
+    void probeEmbeddingModel();
 
 signals:
     void llmServerUrlChanged();
@@ -149,12 +158,15 @@ signals:
     void smartRoutingChanged();
     void fastModelIdChanged();
     void personalityPromptChanged();
+    void systemPromptModeChanged();
     void ttsRateChanged();
     void ttsPitchChanged();
     void ttsVolumeChanged();
     void ttsMutedChanged();
     void availableTtsVoicesChanged();
     void voiceActivated(const QString &voiceId, const QString &onnxPath);
+    void embeddingModelChanged();
+    void embeddingServerUrlChanged();
     void cloudModelChoicesChanged();
     void oauthTokenReady();
     void oauthTokenError(const QString &error);
@@ -203,10 +215,13 @@ private:
     bool m_smartRouting{false};
     QString m_fastModelId;
     QString m_personalityPrompt;
+    QString m_systemPromptMode{QStringLiteral("default")};
     double m_ttsRate{0.05};
     double m_ttsPitch{-0.1};
     double m_ttsVolume{0.85};
     bool m_ttsMuted{false};
+    QString m_embeddingModel{QStringLiteral("nomic-embed-text")};
+    QString m_embeddingServerUrl{QStringLiteral("http://127.0.0.1:11434")};
     QString m_piperModelPath;
     QVariantList m_cloudModelChoices;
     QVariantList m_hfSearchResults;

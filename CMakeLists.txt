@@ -101,12 +101,10 @@ if(WHISPER_BUILD_FROM_SOURCE
         message(STATUS "Enabling CUDA for whisper.cpp (${NVCC_EXECUTABLE})")
     endif()
 
-    # Populate first, then add subdirectory with relaxed flags
-    FetchContent_Populate(whisper_cpp)
-
     # Disable upstream install rules — we handle installation ourselves
     set(GGML_INSTALL OFF CACHE BOOL "" FORCE)
     set(WHISPER_INSTALL OFF CACHE BOOL "" FORCE)
+    set(GGML_CCACHE OFF CACHE BOOL "" FORCE)
 
     # Temporarily relax compiler flags for whisper.cpp — KDE's strict
     # settings conflict with ggml's exception handling code
@@ -115,7 +113,9 @@ if(WHISPER_BUILD_FROM_SOURCE
     set(CMAKE_CXX_FLAGS "-fpermissive -Wno-error")
     set(CMAKE_C_FLAGS "-Wno-error")
 
-    add_subdirectory(${whisper_cpp_SOURCE_DIR} ${whisper_cpp_BINARY_DIR} EXCLUDE_FROM_ALL)
+    # EXCLUDE_FROM_ALL prevents upstream's install() rules from running
+    set(FETCHCONTENT_QUIET ON)
+    FetchContent_MakeAvailable(whisper_cpp)
 
     set(CMAKE_CXX_FLAGS "${_saved_cxx_flags}")
     set(CMAKE_C_FLAGS "${_saved_c_flags}")
@@ -131,7 +131,8 @@ if(WHISPER_BUILD_FROM_SOURCE
     foreach(_tgt whisper ggml ggml-base ggml-cpu)
         if(TARGET ${_tgt})
             set_target_properties(${_tgt} PROPERTIES
-                INSTALL_RPATH_USE_LINK_PATH TRUE)
+                INSTALL_RPATH_USE_LINK_PATH TRUE
+                PUBLIC_HEADER "")
             install(TARGETS ${_tgt} LIBRARY DESTINATION ${KDE_INSTALL_LIBDIR})
         endif()
     endforeach()

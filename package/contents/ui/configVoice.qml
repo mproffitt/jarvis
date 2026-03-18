@@ -11,19 +11,11 @@ Item {
     height: parent ? parent.height : 0
     clip: true
 
-    ScrollView {
-        id: voiceScrollView
-        anchors.fill: parent
-        contentWidth: availableWidth
-
     ColumnLayout {
-        id: voicePage
-        width: voiceScrollView.availableWidth
+        anchors.fill: parent
         spacing: 0
 
-        // ════════════════════════════════════════
-        // TTS VOICES
-        // ════════════════════════════════════════
+        // ── Fixed header: voice info + filters ──
         Kirigami.FormLayout {
             Component.onCompleted: { for (var i = 0; i < children.length; i++) { if (children[i].hasOwnProperty("columns")) { children[i].anchors.horizontalCenter = undefined; children[i].anchors.left = left; children[i].anchors.leftMargin = Qt.binding(function() { return Kirigami.Units.smallSpacing; }); } } }
             Layout.fillWidth: true
@@ -118,84 +110,85 @@ Item {
             }
         }
 
-        Repeater {
-            model: {
-                var all = JarvisBackend.availableTtsVoices
-                var src = sourceFilterCombo.currentValue
-                if (!src || src.length === 0) return all
-                var filtered = []
-                for (var i = 0; i < all.length; i++)
-                    if (all[i].source === src) filtered.push(all[i])
-                return filtered
-            }
-            delegate: Kirigami.AbstractCard {
-                Layout.fillWidth: true
-                Layout.leftMargin: Kirigami.Units.smallSpacing
-                Layout.rightMargin: Kirigami.Units.smallSpacing
-                contentItem: RowLayout {
-                    spacing: Kirigami.Units.largeSpacing
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 2
-                        RowLayout {
-                            spacing: Kirigami.Units.smallSpacing
-                            Label {
-                                text: modelData.name
-                                font.bold: true
+        // ── Scrollable voice cards ──
+        ScrollView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+
+            ListView {
+                id: voiceListView
+                clip: true
+                spacing: Kirigami.Units.smallSpacing
+                model: {
+                    var all = JarvisBackend.availableTtsVoices
+                    var src = sourceFilterCombo.currentValue
+                    if (!src || src.length === 0) return all
+                    var filtered = []
+                    for (var i = 0; i < all.length; i++)
+                        if (all[i].source === src) filtered.push(all[i])
+                    return filtered
+                }
+
+                delegate: Kirigami.AbstractCard {
+                    width: voiceListView.width - Kirigami.Units.smallSpacing * 2
+                    x: Kirigami.Units.smallSpacing
+
+                    contentItem: RowLayout {
+                        spacing: Kirigami.Units.largeSpacing
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+                            RowLayout {
+                                spacing: Kirigami.Units.smallSpacing
+                                Label {
+                                    text: modelData.name
+                                    font.bold: true
+                                }
+                                Label {
+                                    text: modelData.lang
+                                    color: Kirigami.Theme.disabledTextColor
+                                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+                                }
+                                Kirigami.Icon {
+                                    visible: modelData.active
+                                    source: "emblem-default"
+                                    implicitWidth: Kirigami.Units.iconSizes.small
+                                    implicitHeight: Kirigami.Units.iconSizes.small
+                                }
                             }
                             Label {
-                                text: modelData.lang
+                                text: modelData.desc
                                 color: Kirigami.Theme.disabledTextColor
                                 font.pointSize: Kirigami.Theme.smallFont.pointSize
-                            }
-                            Kirigami.Icon {
-                                visible: modelData.active
-                                source: "emblem-default"
-                                implicitWidth: Kirigami.Units.iconSizes.small
-                                implicitHeight: Kirigami.Units.iconSizes.small
+                                Layout.fillWidth: true
+                                wrapMode: Text.Wrap
                             }
                         }
-                        Label {
-                            text: modelData.desc
-                            color: Kirigami.Theme.disabledTextColor
-                            font.pointSize: Kirigami.Theme.smallFont.pointSize
-                            Layout.fillWidth: true
-                            wrapMode: Text.Wrap
+                        Button {
+                            visible: modelData.downloaded
+                            text: i18n("Play")
+                            icon.name: "media-playback-start"
+                            flat: true
+                            ToolTip.text: i18n("Preview this voice")
+                            ToolTip.visible: hovered
+                            onClicked: JarvisBackend.testVoice(modelData.id)
                         }
-                    }
-                    Button {
-                        visible: modelData.downloaded
-                        text: i18n("Play")
-                        icon.name: "media-playback-start"
-                        flat: true
-                        ToolTip.text: i18n("Preview this voice")
-                        ToolTip.visible: hovered
-                        onClicked: JarvisBackend.testVoice(modelData.id)
-                    }
-                    Button {
-                        text: modelData.active ? i18n("Active") : (modelData.downloaded ? i18n("Activate") : i18n("Download"))
-                        icon.name: modelData.active ? "checkmark" : (modelData.downloaded ? "media-playback-start" : "download")
-                        enabled: !modelData.active && !JarvisBackend.downloading
-                        highlighted: modelData.active
-                        onClicked: {
-                            if (modelData.downloaded) JarvisBackend.setActiveTtsVoice(modelData.id)
-                            else JarvisBackend.downloadTtsVoice(modelData.id)
+                        Button {
+                            text: modelData.active ? i18n("Active") : (modelData.downloaded ? i18n("Activate") : i18n("Download"))
+                            icon.name: modelData.active ? "checkmark" : (modelData.downloaded ? "media-playback-start" : "download")
+                            enabled: !modelData.active && !JarvisBackend.downloading
+                            highlighted: modelData.active
+                            onClicked: {
+                                if (modelData.downloaded) JarvisBackend.setActiveTtsVoice(modelData.id)
+                                else JarvisBackend.downloadTtsVoice(modelData.id)
+                            }
                         }
                     }
                 }
             }
         }
 
-        // ════════════════════════════════════════
-        // VOICE SYNTHESIS SETTINGS
-        // ════════════════════════════════════════
-        Kirigami.FormLayout {
-            Component.onCompleted: { for (var i = 0; i < children.length; i++) { if (children[i].hasOwnProperty("columns")) { children[i].anchors.horizontalCenter = undefined; children[i].anchors.left = left; children[i].anchors.leftMargin = Qt.binding(function() { return Kirigami.Units.smallSpacing; }); } } }
-            Layout.fillWidth: true
-
-        }
-
-        // Voice Synthesis Settings — outside FormLayout for full-width sliders
+        // ── Fixed bottom: synthesis settings ──
         Kirigami.Heading {
             text: i18n("Voice Synthesis Settings")
             level: 4
@@ -249,11 +242,8 @@ Item {
             text: i18n("Test Current Voice")
             icon.name: "media-playback-start"
             Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.bottomMargin: Kirigami.Units.largeSpacing
             onClicked: JarvisBackend.testVoice(JarvisBackend.currentVoiceName)
         }
-
-        // Bottom spacer
-        Item { Layout.preferredHeight: Kirigami.Units.largeSpacing }
-    }
     }
 }

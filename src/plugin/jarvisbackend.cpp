@@ -11,6 +11,7 @@
 #include <QDBusInterface>
 #include <QDBusReply>
 #include <QDBusUnixFileDescriptor>
+#include <QCoreApplication>
 #include <QGuiApplication>
 #include <QClipboard>
 #include <unistd.h>
@@ -39,8 +40,8 @@ JarvisBackend::JarvisBackend(QObject *parent)
 {
     // Create modules
     m_settings = new JarvisSettings(m_networkManager, this);
+    m_audio = new JarvisAudio(m_settings, this);  // pw_init() must happen before TTS
     m_tts = new JarvisTts(m_settings, this);
-    m_audio = new JarvisAudio(m_settings, this);
     m_system = new JarvisSystem(this);
     m_commands = new JarvisCommands(this);
     m_rag = new JarvisRag(m_settings, this);
@@ -74,11 +75,65 @@ JarvisBackend::JarvisBackend(QObject *parent)
 
     loadChatHistory();
     setStatus("Online. All systems operational.");
+
+    // Ensure clean shutdown when plasmashell exits
+    connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, &JarvisBackend::shutdown);
 }
 
 JarvisBackend::~JarvisBackend()
 {
+    // Stop streams; child QObjects are deleted automatically by Qt parent ownership
+    shutdown();
+}
+
+void JarvisBackend::shutdown()
+{
+    qDebug() << "[JARVIS] shutdown() called, m_shutDown=" << m_shutDown;
+    if (m_shutDown)
+        return;
+    m_shutDown = true;
+
+    qDebug() << "[JARVIS] Shutting down streams...";
+
+    m_healthCheckTimer->stop();
+    m_reminderTimer->stop();
+    if (m_conversationTimeout)
+        m_conversationTimeout->stop();
+
+    // Stop audio capture and TTS playback without deleting — singleton stays alive
+    if (m_audio)
+        m_audio->stopStreams();
+
+    if (m_tts)
+        m_tts->stopStreams();
+
     m_mcp->stopAllServers();
+
+    qDebug() << "[JARVIS] Streams stopped.";
+}
+
+void JarvisBackend::resume()
+{
+    qDebug() << "[JARVIS] resume() called, m_shutDown=" << m_shutDown;
+    if (!m_shutDown)
+        return;
+    m_shutDown = false;
+
+    qDebug() << "[JARVIS] Resuming streams...";
+
+    m_healthCheckTimer->start(10000);
+    m_reminderTimer->start(1000);
+
+    if (m_audio)
+        m_audio->restartStreams();
+
+    if (m_tts)
+        m_tts->restartStream();
+
+    m_mcp->startAllServers();
+    checkConnection();
+
+    qDebug() << "[JARVIS] Streams resumed.";
 }
 
 void JarvisBackend::connectModuleSignals()
@@ -286,6 +341,7 @@ void JarvisBackend::connectModuleSignals()
     connect(m_settings, &JarvisSettings::fastModelIdChanged, this, &JarvisBackend::fastModelIdChanged);
     connect(m_settings, &JarvisSettings::wakeWordChanged, this, &JarvisBackend::wakeWordChanged);
     connect(m_settings, &JarvisSettings::personalityPromptChanged, this, &JarvisBackend::personalityPromptChanged);
+    connect(m_settings, &JarvisSettings::systemPromptModeChanged, this, &JarvisBackend::systemPromptModeChanged);
     connect(m_settings, &JarvisSettings::ttsRateChanged, this, [this]() { m_tts->onTtsRateChanged(); });
     connect(m_settings, &JarvisSettings::ttsPitchChanged, this, [this]() { m_tts->onTtsPitchChanged(); });
     connect(m_settings, &JarvisSettings::ttsVolumeChanged, this, [this]() { m_tts->onTtsVolumeChanged(); });
@@ -419,7 +475,10 @@ void JarvisBackend::setClaudeApiKey(const QString &key) { m_settings->setClaudeA
 void JarvisBackend::setLlmModelId(const QString &modelId) { m_settings->setLlmModelId(modelId); }
 void JarvisBackend::refreshOllamaModels()
 {
-    m_settings->fetchOllamaModels();
+    if (m_settings->llmProvider() == QStringLiteral("llamacpp"))
+        m_settings->populateModelList();
+    else
+        m_settings->fetchOllamaModels();
     emit availableLlmModelsChanged();
 }
 
@@ -642,6 +701,8 @@ void JarvisBackend::stopConversation()
 }
 
 void JarvisBackend::setPersonalityPrompt(const QString &prompt) { m_settings->setPersonalityPrompt(prompt); }
+QString JarvisBackend::systemPromptMode() const { return m_settings->systemPromptMode(); }
+void JarvisBackend::setSystemPromptMode(const QString &mode) { m_settings->setSystemPromptMode(mode); }
 void JarvisBackend::cancelDownload() { m_settings->cancelDownload(); }
 
 void JarvisBackend::testVoice(const QString &voiceId)
@@ -1192,19 +1253,22 @@ void JarvisBackend::continueToLlm(const QString &userMessage)
         }
 
         if (m_settings->isClaudeProvider()) {
-            requestBody[QStringLiteral("system")] = buildSystemPrompt();
+            const QString sysPrompt = buildSystemPrompt();
+            if (!sysPrompt.isEmpty())
+                requestBody[QStringLiteral("system")] = sysPrompt;
         }
 
-        // Inject tools — Claude and OpenAI use the native tools API,
-        // Ollama/llama.cpp use ACTION blocks in the system prompt instead.
-        if (m_settings->isClaudeProvider()) {
-            auto tools = builtinToolsForClaude();
-            for (const auto &t : m_mcp->allToolsForClaude()) tools.append(t);
-            requestBody[QStringLiteral("tools")] = tools;
-        } else if (m_settings->llmProvider() == QStringLiteral("openai")) {
-            auto tools = builtinToolsForOpenAI();
-            for (const auto &t : m_mcp->allToolsForOpenAI()) tools.append(t);
-            requestBody[QStringLiteral("tools")] = tools;
+        // Inject native tools for models that support them
+        if (m_settings->currentModelSupportsTools()) {
+            if (m_settings->isClaudeProvider()) {
+                auto tools = builtinToolsForClaude();
+                for (const auto &t : m_mcp->allToolsForClaude()) tools.append(t);
+                requestBody[QStringLiteral("tools")] = tools;
+            } else {
+                auto tools = builtinToolsForOpenAI();
+                for (const auto &t : m_mcp->allToolsForOpenAI()) tools.append(t);
+                requestBody[QStringLiteral("tools")] = tools;
+            }
         }
 
         url = QUrl(m_settings->chatCompletionsUrl());
@@ -1250,10 +1314,19 @@ void JarvisBackend::continueToLlm(const QString &userMessage)
 
 QString JarvisBackend::buildSystemPrompt() const
 {
-    QString systemPrompt = m_settings->personalityPrompt().isEmpty()
-        ? QString::fromUtf8(JARVIS_SYSTEM_PROMPT) : m_settings->personalityPrompt();
+    const QString mode = m_settings->systemPromptMode();
+    if (mode == QStringLiteral("none"))
+        return QString(); // Empty = no system message, model's embedded prompt is preserved
 
+    QString systemPrompt;
+    if (mode == QStringLiteral("custom") && !m_settings->personalityPrompt().isEmpty())
+        systemPrompt = m_settings->personalityPrompt();
+    else
+        systemPrompt = QString::fromUtf8(JARVIS_SYSTEM_PROMPT);
 
+    // Include ACTION blocks only when the model lacks native tool calling
+    if (!m_settings->currentModelSupportsTools())
+        systemPrompt += QString::fromUtf8(JARVIS_ACTION_PROMPT);
 
     systemPrompt += QStringLiteral("\n\nCurrent system status:\n");
     systemPrompt += QStringLiteral("- CPU Usage: %1%\n").arg(m_system->cpuUsage(), 0, 'f', 1);
@@ -1433,10 +1506,13 @@ QJsonArray JarvisBackend::buildConversationContext() const
 
     // For Claude, the system prompt is top-level (not in messages array)
     if (!m_settings->isClaudeProvider()) {
-        QJsonObject systemMsg;
-        systemMsg[QStringLiteral("role")] = QStringLiteral("system");
-        systemMsg[QStringLiteral("content")] = buildSystemPrompt();
-        messages.append(systemMsg);
+        const QString sysContent = buildSystemPrompt();
+        if (!sysContent.isEmpty()) {
+            QJsonObject systemMsg;
+            systemMsg[QStringLiteral("role")] = QStringLiteral("system");
+            systemMsg[QStringLiteral("content")] = sysContent;
+            messages.append(systemMsg);
+        }
     }
 
     for (const auto &[role, content] : m_conversationHistory) {
@@ -1722,11 +1798,13 @@ void JarvisBackend::continueAfterToolCall()
     }
 
     if (m_settings->isClaudeProvider()) {
-        requestBody[QStringLiteral("system")] = buildSystemPrompt();
+        const QString sysPrompt = buildSystemPrompt();
+        if (!sysPrompt.isEmpty())
+            requestBody[QStringLiteral("system")] = sysPrompt;
         auto tools = builtinToolsForClaude();
         for (const auto &t : m_mcp->allToolsForClaude()) tools.append(t);
         requestBody[QStringLiteral("tools")] = tools;
-    } else if (m_settings->llmProvider() == QStringLiteral("openai")) {
+    } else if (m_settings->currentModelSupportsTools()) {
         auto tools = builtinToolsForOpenAI();
         for (const auto &t : m_mcp->allToolsForOpenAI()) tools.append(t);
         requestBody[QStringLiteral("tools")] = tools;
@@ -2135,38 +2213,34 @@ void JarvisBackend::handleScreenContext(const QString &question)
     const QString originalModel = m_settings->llmModelId();
     bool switchedModel = false;
 
-    if (provider == QStringLiteral("ollama")) {
-        // Check if current model supports vision (llava, bakllava, moondream, etc.)
-        static const QStringList visionModels = {
-            QStringLiteral("llava"), QStringLiteral("bakllava"),
-            QStringLiteral("moondream"), QStringLiteral("minicpm-v"),
-            QStringLiteral("llama3.2-vision"),
-        };
-        const QString currentModel = originalModel.toLower();
+    if (provider == QStringLiteral("ollama") || provider == QStringLiteral("llamacpp")) {
+        // Check if current model supports vision via capabilities metadata
+        const auto models = m_settings->availableLlmModels();
         bool isVision = false;
-        for (const auto &vm : visionModels) {
-            if (currentModel.contains(vm)) { isVision = true; break; }
+        for (const auto &v : models) {
+            const auto map = v.toMap();
+            if (map[QStringLiteral("id")].toString() == originalModel) {
+                const auto caps = map[QStringLiteral("capabilities")].toStringList();
+                if (caps.contains(QStringLiteral("vision"))) isVision = true;
+                break;
+            }
         }
 
         if (!isVision) {
-            // Search installed Ollama models for a vision-capable one
-            const auto models = m_settings->availableLlmModels();
+            // Search installed models for a vision-capable one
             for (const auto &v : models) {
                 const auto map = v.toMap();
-                const QString id = map[QStringLiteral("id")].toString().toLower();
-                for (const auto &vm : visionModels) {
-                    if (id.contains(vm)) {
-                        m_settings->setLlmModelId(map[QStringLiteral("id")].toString());
-                        switchedModel = true;
-                        qDebug() << "[JARVIS] Auto-switched to vision model:" << map[QStringLiteral("id")].toString();
-                        break;
-                    }
+                const auto caps = map[QStringLiteral("capabilities")].toStringList();
+                if (caps.contains(QStringLiteral("vision"))) {
+                    m_settings->setLlmModelId(map[QStringLiteral("id")].toString());
+                    switchedModel = true;
+                    qDebug() << "[JARVIS] Auto-switched to vision model:" << map[QStringLiteral("id")].toString();
+                    break;
                 }
-                if (switchedModel) break;
             }
 
             if (!switchedModel) {
-                speak(QStringLiteral("I don't have a vision model installed. Please install llava in Ollama."));
+                speak(QStringLiteral("I don't have a vision model installed. Please install a vision model like llava."));
                 setStatus("No vision model available.");
                 return;
             }
@@ -2257,7 +2331,11 @@ void JarvisBackend::handleScreenContext(const QString &question)
                     {QStringLiteral("content"), content},
                 },
             };
-            requestBody[QStringLiteral("system")] = buildSystemPrompt();
+            {
+                const QString sysPrompt = buildSystemPrompt();
+                if (!sysPrompt.isEmpty())
+                    requestBody[QStringLiteral("system")] = sysPrompt;
+            }
             requestBody[QStringLiteral("max_tokens")] = 1024;
             requestBody[QStringLiteral("stream")] = false;
 

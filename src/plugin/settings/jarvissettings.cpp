@@ -50,6 +50,7 @@ JarvisSettings::JarvisSettings(QNetworkAccessManager *nam, QObject *parent)
     } else {
         fetchCloudModels();
     }
+    probeEmbeddingModel();
     fetchPiperVoices(QStringLiteral("en"));
 
     // Auto-search HuggingFace for initial results (for ollama/llamacpp)
@@ -178,6 +179,12 @@ void JarvisSettings::loadSettings()
     m_ttsVolume = m_settings.value(QStringLiteral("tts/volume"), 0.85).toDouble();
     m_ttsMuted = m_settings.value(QStringLiteral("tts/muted"), false).toBool();
     m_personalityPrompt = m_settings.value(QStringLiteral("chat/personalityPrompt")).toString();
+    m_systemPromptMode = m_settings.value(QStringLiteral("chat/systemPromptMode"),
+                                           QStringLiteral("default")).toString();
+    m_embeddingModel = m_settings.value(QStringLiteral("rag/embeddingModel"),
+                                         QStringLiteral("nomic-embed-text")).toString();
+    m_embeddingServerUrl = m_settings.value(QStringLiteral("rag/embeddingServerUrl"),
+                                             QStringLiteral("http://127.0.0.1:11434")).toString();
 
     // Resolve piper model path from saved voice name
     const QString voicesDir = jarvisDataDir() + QStringLiteral("/piper-voices");
@@ -220,6 +227,9 @@ void JarvisSettings::saveSettings()
     m_settings.setValue(QStringLiteral("tts/volume"), m_ttsVolume);
     m_settings.setValue(QStringLiteral("tts/muted"), m_ttsMuted);
     m_settings.setValue(QStringLiteral("chat/personalityPrompt"), m_personalityPrompt);
+    m_settings.setValue(QStringLiteral("chat/systemPromptMode"), m_systemPromptMode);
+    m_settings.setValue(QStringLiteral("rag/embeddingModel"), m_embeddingModel);
+    m_settings.setValue(QStringLiteral("rag/embeddingServerUrl"), m_embeddingServerUrl);
     m_settings.sync();
 }
 
@@ -380,6 +390,7 @@ void JarvisSettings::setLlmModelId(const QString &modelId)
         m_settings.setValue(QStringLiteral("llm/modelId/%1").arg(m_llmProvider), modelId);
         saveSettings();
         emit llmModelIdChanged();
+        probeModelToolSupport(modelId);
     }
 }
 
@@ -504,6 +515,7 @@ void JarvisSettings::setFastModelId(const QString &modelId)
         m_settings.setValue(QStringLiteral("llm/fastModelId/%1").arg(m_llmProvider), modelId);
         saveSettings();
         emit fastModelIdChanged();
+        probeModelToolSupport(modelId);
     }
 }
 
@@ -545,6 +557,15 @@ void JarvisSettings::setPersonalityPrompt(const QString &prompt)
     }
 }
 
+void JarvisSettings::setSystemPromptMode(const QString &mode)
+{
+    if (m_systemPromptMode != mode) {
+        m_systemPromptMode = mode;
+        saveSettings();
+        emit systemPromptModeChanged();
+    }
+}
+
 void JarvisSettings::setTtsRate(double rate)
 {
     m_ttsRate = qBound(-1.0, rate, 1.0);
@@ -572,6 +593,149 @@ void JarvisSettings::setTtsMuted(bool muted)
         m_ttsMuted = muted;
         saveSettings();
         emit ttsMutedChanged();
+    }
+}
+
+bool JarvisSettings::currentModelSupportsTools() const
+{
+    // Cloud providers always support native tools
+    if (m_llmProvider == QStringLiteral("openai") || m_llmProvider == QStringLiteral("claude")
+        || m_llmProvider == QStringLiteral("gemini"))
+        return true;
+
+    // Check capability metadata for local models
+    const QString currentId = m_llmProvider == QStringLiteral("llamacpp") ? m_currentModelName : m_llmModelId;
+    for (const auto &v : m_availableLlmModels) {
+        const auto map = v.toMap();
+        if (map[QStringLiteral("id")].toString() == currentId) {
+            return map[QStringLiteral("capabilities")].toStringList().contains(QStringLiteral("tools"));
+        }
+    }
+    return false;
+}
+
+void JarvisSettings::probeModelToolSupport(const QString &modelName)
+{
+    if (m_llmProvider != QStringLiteral("ollama") || modelName.isEmpty())
+        return;
+
+    // Check if already probed
+    for (const auto &v : std::as_const(m_availableLlmModels)) {
+        const auto map = v.toMap();
+        if (map[QStringLiteral("id")].toString() == modelName) {
+            if (map[QStringLiteral("capabilities")].toStringList().contains(QStringLiteral("tools")))
+                return; // Already known to support tools
+            break;
+        }
+    }
+
+    QJsonObject showBody;
+    showBody[QStringLiteral("model")] = modelName;
+    QNetworkRequest showReq(QUrl(m_llmServerUrl + QStringLiteral("/api/show")));
+    showReq.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    showReq.setTransferTimeout(5000);
+
+    auto *showReply = m_networkManager->post(showReq, QJsonDocument(showBody).toJson());
+    connect(showReply, &QNetworkReply::finished, this, [this, showReply, modelName]() {
+        showReply->deleteLater();
+        if (showReply->error() != QNetworkReply::NoError) return;
+
+        const auto showDoc = QJsonDocument::fromJson(showReply->readAll());
+        const QString tmpl = showDoc.object()[QStringLiteral("template")].toString();
+
+        bool hasTools = tmpl.contains(QStringLiteral(".Tools"))
+            || tmpl.contains(QStringLiteral("<tool_call>"))
+            || tmpl.contains(QStringLiteral("<|plugin|>"))
+            || tmpl.contains(QStringLiteral("tool_calls"));
+
+        if (!hasTools) return;
+
+        for (int i = 0; i < m_availableLlmModels.size(); ++i) {
+            auto entry = m_availableLlmModels[i].toMap();
+            if (entry[QStringLiteral("id")].toString() == modelName) {
+                auto caps = entry[QStringLiteral("capabilities")].toStringList();
+                if (!caps.contains(QStringLiteral("tools"))) {
+                    caps << QStringLiteral("tools");
+                    entry[QStringLiteral("capabilities")] = QVariant(caps);
+                    m_availableLlmModels[i] = entry;
+                    emit availableLlmModelsChanged();
+                }
+                break;
+            }
+        }
+    });
+}
+
+void JarvisSettings::probeEmbeddingModel()
+{
+    const QUrl url(m_embeddingServerUrl + QStringLiteral("/api/tags"));
+    QNetworkRequest request(url);
+    request.setTransferTimeout(5000);
+
+    auto *reply = m_networkManager->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            qDebug() << "[JARVIS] Embedding server not reachable, clearing embedding model";
+            if (!m_embeddingModel.isEmpty()) {
+                m_embeddingModel.clear();
+                saveSettings();
+                emit embeddingModelChanged();
+            }
+            return;
+        }
+
+        const auto doc = QJsonDocument::fromJson(reply->readAll());
+        if (doc.isNull()) return;
+
+        const auto models = doc.object()[QStringLiteral("models")].toArray();
+        QString detected;
+        for (const auto &m : models) {
+            const auto obj = m.toObject();
+            const QString name = obj[QStringLiteral("name")].toString();
+            const auto details = obj[QStringLiteral("details")].toObject();
+            const QString family = details[QStringLiteral("family")].toString().toLower();
+
+            if (family.contains(QStringLiteral("bert")) || name.toLower().contains(QStringLiteral("embed"))) {
+                detected = name;
+                break;
+            }
+        }
+
+        if (!detected.isEmpty()) {
+            if (m_embeddingModel == QStringLiteral("nomic-embed-text") || m_embeddingModel.isEmpty()) {
+                m_embeddingModel = detected;
+                saveSettings();
+                emit embeddingModelChanged();
+                qDebug() << "[JARVIS] Auto-detected embedding model:" << detected;
+            }
+        } else {
+            if (!m_embeddingModel.isEmpty()) {
+                m_embeddingModel.clear();
+                saveSettings();
+                emit embeddingModelChanged();
+                qDebug() << "[JARVIS] No embedding model found on server, disabling embedding";
+            }
+        }
+    });
+}
+
+void JarvisSettings::setEmbeddingModel(const QString &model)
+{
+    if (m_embeddingModel != model) {
+        m_embeddingModel = model;
+        saveSettings();
+        emit embeddingModelChanged();
+    }
+}
+
+void JarvisSettings::setEmbeddingServerUrl(const QString &url)
+{
+    if (m_embeddingServerUrl != url) {
+        m_embeddingServerUrl = url;
+        saveSettings();
+        emit embeddingServerUrlChanged();
+        probeEmbeddingModel();
     }
 }
 
@@ -782,6 +946,28 @@ void JarvisSettings::fetchOllamaModels()
             const qint64 size = obj[QStringLiteral("size")].toVariant().toLongLong();
             const QString sizeStr = QStringLiteral("%1 GB").arg(size / 1073741824.0, 0, 'f', 1);
 
+            // Determine capabilities from model metadata
+            QStringList capabilities;
+            const auto details = obj[QStringLiteral("details")].toObject();
+            const auto families = details[QStringLiteral("families")].toArray();
+            const QString family = details[QStringLiteral("family")].toString().toLower();
+            const QString nameLower = name.toLower();
+
+            bool hasClip = false;
+            bool isBert = family.contains(QStringLiteral("bert"));
+            for (const auto &f : families) {
+                if (f.toString().toLower() == QStringLiteral("clip"))
+                    hasClip = true;
+            }
+
+            if (isBert || nameLower.contains(QStringLiteral("embed"))) {
+                capabilities << QStringLiteral("embedding");
+            } else if (hasClip) {
+                capabilities << QStringLiteral("chat") << QStringLiteral("vision");
+            } else {
+                capabilities << QStringLiteral("chat");
+            }
+
             m_availableLlmModels.append(QVariantMap{
                 {QStringLiteral("id"), name},
                 {QStringLiteral("name"), name},
@@ -789,9 +975,14 @@ void JarvisSettings::fetchOllamaModels()
                 {QStringLiteral("desc"), QStringLiteral("Installed in Ollama")},
                 {QStringLiteral("downloaded"), true},
                 {QStringLiteral("active"), name == m_llmModelId},
+                {QStringLiteral("capabilities"), QVariant(capabilities)},
             });
         }
         emit availableLlmModelsChanged();
+
+        // Probe the currently active model for tool support
+        if (!m_llmModelId.isEmpty())
+            probeModelToolSupport(m_llmModelId);
     });
 }
 
@@ -800,7 +991,7 @@ void JarvisSettings::searchHuggingFaceModels(const QString &query)
     m_lastHfQuery = query;
     const QString searchQuery = query.isEmpty()
         ? QStringLiteral("gguf instruct")
-        : QStringLiteral("gguf %1").arg(query);
+        : query;
 
     const QString encodedQuery = QString(searchQuery).replace(QLatin1Char(' '), QLatin1Char('+'));
     const QByteArray searchUrlBytes = QStringLiteral(
@@ -891,6 +1082,27 @@ void JarvisSettings::searchHuggingFaceModels(const QString &query)
                     quantToFile[quant] = fname;
             }
 
+            // Parse parameter count from model name for size classification
+            // Matches patterns like "7B", "1.5B", "70B", "0.5B", "400M" in the name
+            static const QRegularExpression paramRe(
+                QStringLiteral("(?:^|[\\s_-])(\\d+(?:\\.\\d+)?)(B|M)(?:[\\s_-]|$)"),
+                QRegularExpression::CaseInsensitiveOption);
+            const auto pm = paramRe.match(baseName);
+            QString sizeCategory;
+            if (pm.hasMatch()) {
+                double params = pm.captured(1).toDouble();
+                if (pm.captured(2).toUpper() == QStringLiteral("M"))
+                    params /= 1000.0; // Convert M to B
+                if (params < 3.0)
+                    sizeCategory = QStringLiteral("tiny");
+                else if (params < 9.0)
+                    sizeCategory = QStringLiteral("small");
+                else if (params <= 35.0)
+                    sizeCategory = QStringLiteral("medium");
+                else
+                    sizeCategory = QStringLiteral("large");
+            }
+
             // Common fields for all cards from this repo
             const QVariantMap common = {
                 {QStringLiteral("id"), modelId},
@@ -898,11 +1110,13 @@ void JarvisSettings::searchHuggingFaceModels(const QString &query)
                 {QStringLiteral("license"), license},
                 {QStringLiteral("languages"), languages.join(QStringLiteral(", "))},
                 {QStringLiteral("desc"), pipelineTag.isEmpty() ? QStringLiteral("GGUF model") : pipelineTag},
+                {QStringLiteral("sizeCategory"), sizeCategory},
             };
 
             if (quantToFile.isEmpty()) {
                 QVariantMap entry = common;
                 entry[QStringLiteral("name")] = baseName;
+                entry[QStringLiteral("quant")] = QString();
                 m_hfSearchResults.append(entry);
             } else {
                 for (auto it = quantToFile.constBegin(); it != quantToFile.constEnd(); ++it) {
@@ -911,6 +1125,7 @@ void JarvisSettings::searchHuggingFaceModels(const QString &query)
                     entry[QStringLiteral("name")] = quant == QStringLiteral("default")
                         ? baseName : QStringLiteral("%1 (%2)").arg(baseName, quant);
                     entry[QStringLiteral("file")] = it.value();
+                    entry[QStringLiteral("quant")] = quant;
                     m_hfSearchResults.append(entry);
                 }
             }
@@ -935,9 +1150,20 @@ void JarvisSettings::fetchModelDetails(const QString &modelId)
         const auto obj = doc.object();
         const auto cardData = obj[QStringLiteral("cardData")].toObject();
         const auto gguf = obj[QStringLiteral("gguf")].toObject();
+        const auto safetensors = obj[QStringLiteral("safetensors")].toObject();
 
-        // Parameter count
-        const qint64 totalParams = gguf[QStringLiteral("total")].toVariant().toLongLong();
+        // Parameter count — try gguf first, then safetensors, then cardData
+        qint64 totalParams = gguf[QStringLiteral("total")].toVariant().toLongLong();
+        if (totalParams <= 0) {
+            // safetensors stores params per dtype under "parameters"
+            const auto stParams = safetensors[QStringLiteral("parameters")].toObject();
+            for (auto it = stParams.begin(); it != stParams.end(); ++it)
+                totalParams += it.value().toVariant().toLongLong();
+        }
+        if (totalParams <= 0) {
+            // Some models store "num_params" in cardData
+            totalParams = cardData[QStringLiteral("num_params")].toVariant().toLongLong();
+        }
         QString paramStr;
         if (totalParams >= 1000000000)
             paramStr = QStringLiteral("%1B").arg(totalParams / 1000000000.0, 0, 'f', 1);
@@ -972,7 +1198,9 @@ void JarvisSettings::fetchModelDetails(const QString &modelId)
         m_modelDetails = QVariantMap{
             {QStringLiteral("id"), modelId},
             {QStringLiteral("params"), paramStr},
-            {QStringLiteral("architecture"), gguf[QStringLiteral("architecture")].toString()},
+            {QStringLiteral("architecture"), gguf[QStringLiteral("architecture")].toString().isEmpty()
+                ? obj[QStringLiteral("pipeline_tag")].toString()
+                : gguf[QStringLiteral("architecture")].toString()},
             {QStringLiteral("contextLength"), gguf[QStringLiteral("context_length")].toVariant().toLongLong()},
             {QStringLiteral("license"), license},
             {QStringLiteral("author"), obj[QStringLiteral("author")].toString()},
@@ -996,14 +1224,30 @@ void JarvisSettings::fetchModelDetails(const QString &modelId)
 
             const auto treeArr = QJsonDocument::fromJson(treeReply->readAll()).array();
             QVariantMap fileSizes;
+            qint64 totalSize = 0;
             for (const auto &f : treeArr) {
                 const auto fObj = f.toObject();
                 const QString path = fObj[QStringLiteral("path")].toString();
-                if (!path.endsWith(QStringLiteral(".gguf"))) continue;
                 const qint64 size = fObj[QStringLiteral("size")].toVariant().toLongLong();
-                if (size > 0) {
-                    fileSizes[path] = QStringLiteral("%1 GB").arg(size / 1073741824.0, 0, 'f', 1);
+                if (size <= 0) continue;
+                // Track model files (GGUF, safetensors, bin, pt, onnx)
+                if (path.endsWith(QStringLiteral(".gguf"))
+                    || path.endsWith(QStringLiteral(".safetensors"))
+                    || path.endsWith(QStringLiteral(".bin"))
+                    || path.endsWith(QStringLiteral(".pt"))
+                    || path.endsWith(QStringLiteral(".onnx"))) {
+                    totalSize += size;
+                    if (size >= 1073741824)
+                        fileSizes[path] = QStringLiteral("%1 GB").arg(size / 1073741824.0, 0, 'f', 1);
+                    else
+                        fileSizes[path] = QStringLiteral("%1 MB").arg(size / 1048576.0, 0, 'f', 0);
                 }
+            }
+            // Add a total entry as fallback when specific file isn't matched
+            if (totalSize > 0) {
+                fileSizes[QString()] = totalSize >= 1073741824
+                    ? QStringLiteral("%1 GB").arg(totalSize / 1073741824.0, 0, 'f', 1)
+                    : QStringLiteral("%1 MB").arg(totalSize / 1048576.0, 0, 'f', 0);
             }
             m_modelDetails[QStringLiteral("fileSizes")] = fileSizes;
             emit modelDetailsChanged();
@@ -1035,6 +1279,19 @@ void JarvisSettings::populateModelList()
         friendlyName.replace('-', ' ');
         friendlyName.replace('_', ' ');
 
+        // Determine capabilities from filename heuristics
+        QStringList capabilities;
+        const QString lower = filename.toLower();
+        if (lower.contains(QStringLiteral("llava")) || lower.contains(QStringLiteral("vision"))
+            || lower.contains(QStringLiteral("bakllava")) || lower.contains(QStringLiteral("moondream"))
+            || lower.contains(QStringLiteral("minicpm-v"))) {
+            capabilities << QStringLiteral("chat") << QStringLiteral("vision");
+        } else if (lower.contains(QStringLiteral("embed")) || lower.contains(QStringLiteral("nomic"))) {
+            capabilities << QStringLiteral("embedding");
+        } else {
+            capabilities << QStringLiteral("chat");
+        }
+
         m_availableLlmModels.append(QVariantMap{
             {QStringLiteral("id"), id},
             {QStringLiteral("name"), friendlyName},
@@ -1042,6 +1299,7 @@ void JarvisSettings::populateModelList()
             {QStringLiteral("downloaded"), true},
             {QStringLiteral("active"), (id == m_currentModelName || friendlyName.contains(m_currentModelName))},
             {QStringLiteral("desc"), QStringLiteral("Local GGUF model")},
+            {QStringLiteral("capabilities"), QVariant(capabilities)},
         });
     }
 }

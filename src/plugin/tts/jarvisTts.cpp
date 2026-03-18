@@ -28,9 +28,24 @@ JarvisTts::JarvisTts(JarvisSettings *settings, QObject *parent)
 JarvisTts::~JarvisTts()
 {
     stop();
+    if (m_playback) m_playback->stop();
 #ifdef HAVE_LIBPIPER
     stopLibPiper();
 #endif
+}
+
+void JarvisTts::stopStreams()
+{
+    stop();
+    if (m_playback) m_playback->stop();
+    qDebug() << "[JARVIS] TTS streams stopped";
+}
+
+void JarvisTts::restartStream()
+{
+    if (m_playback && !m_playback->isRunning())
+        m_playback->start();
+    qDebug() << "[JARVIS] TTS stream restarted";
 }
 
 #ifdef HAVE_LIBPIPER
