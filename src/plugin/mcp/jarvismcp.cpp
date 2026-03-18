@@ -18,6 +18,31 @@ JarvisMcp::JarvisMcp(QObject *parent)
     : QObject(parent)
 {
     loadConfig();
+
+    // Watch config file for changes
+    m_configWatcher = new QFileSystemWatcher(this);
+    const QString path = configFilePath();
+    if (QFile::exists(path))
+        m_configWatcher->addPath(path);
+    // Also watch the directory so we detect file creation
+    m_configWatcher->addPath(QFileInfo(path).absolutePath());
+
+    connect(m_configWatcher, &QFileSystemWatcher::fileChanged, this, [this](const QString &) {
+        qDebug() << "[MCP] Config file changed, reloading...";
+        // Re-add the file path (Qt removes it after a change signal)
+        const QString path = configFilePath();
+        if (QFile::exists(path) && !m_configWatcher->files().contains(path))
+            m_configWatcher->addPath(path);
+        QTimer::singleShot(500, this, &JarvisMcp::reloadConfig); // debounce
+    });
+    connect(m_configWatcher, &QFileSystemWatcher::directoryChanged, this, [this](const QString &) {
+        const QString path = configFilePath();
+        if (QFile::exists(path) && !m_configWatcher->files().contains(path)) {
+            m_configWatcher->addPath(path);
+            qDebug() << "[MCP] Config file created, loading...";
+            QTimer::singleShot(500, this, &JarvisMcp::reloadConfig);
+        }
+    });
 }
 
 JarvisMcp::~JarvisMcp()
@@ -72,7 +97,86 @@ void JarvisMcp::loadConfig()
         m_servers.insert(name, std::move(server));
     }
 
-    qDebug() << "[MCP] Loaded" << m_servers.size() << "server config(s)";
+    qWarning() << "[MCP] Loaded" << m_servers.size() << "server config(s)";
+}
+
+void JarvisMcp::reloadConfig()
+{
+    // Parse the new config
+    QFile file(configFilePath());
+    if (!file.open(QIODevice::ReadOnly)) return;
+
+    const auto doc = QJsonDocument::fromJson(file.readAll());
+    if (!doc.isObject()) return;
+
+    const auto root = doc.object();
+    const auto servers = root[QStringLiteral("mcpServers")].toObject();
+
+    // Find servers to stop (removed from config)
+    QStringList toStop;
+    for (auto it = m_servers.constBegin(); it != m_servers.constEnd(); ++it) {
+        if (!servers.contains(it.key()))
+            toStop.append(it.key());
+    }
+    for (const auto &name : toStop)
+        stopServer(name);
+
+    // Find servers to start (new in config)
+    for (auto it = servers.begin(); it != servers.end(); ++it) {
+        const auto name = it.key();
+        if (m_servers.contains(name)) continue; // already running
+
+        const auto cfg = it.value().toObject();
+        McpServer server;
+        server.name = name;
+        server.command = cfg[QStringLiteral("command")].toString();
+        for (const auto &a : cfg[QStringLiteral("args")].toArray())
+            server.args.append(a.toString());
+        server.env = QProcessEnvironment::systemEnvironment();
+        for (auto eit = cfg[QStringLiteral("env")].toObject().begin();
+             eit != cfg[QStringLiteral("env")].toObject().end(); ++eit)
+            server.env.insert(eit.key(), eit.value().toString());
+
+        m_servers.insert(name, std::move(server));
+        startServer(m_servers[name]);
+        qDebug() << "[MCP] Started new server:" << name;
+    }
+}
+
+void JarvisMcp::stopServer(const QString &name)
+{
+    auto it = m_servers.find(name);
+    if (it == m_servers.end()) return;
+
+    auto &server = it.value();
+    if (server.process) {
+        server.process->closeWriteChannel();
+        if (!server.process->waitForFinished(3000)) {
+            server.process->terminate();
+            if (!server.process->waitForFinished(2000))
+                server.process->kill();
+        }
+        delete server.process;
+        server.process = nullptr;
+    }
+
+    // Remove tools belonging to this server
+    QStringList toRemove;
+    for (auto tit = m_toolToServer.begin(); tit != m_toolToServer.end(); ++tit) {
+        if (tit.value() == name)
+            toRemove.append(tit.key());
+    }
+    for (const auto &toolName : toRemove) {
+        m_tools.remove(toolName);
+        m_toolToServer.remove(toolName);
+    }
+
+    m_servers.erase(it);
+
+    if (!toRemove.isEmpty())
+        Q_EMIT toolsChanged();
+    Q_EMIT serverStatusChanged();
+    qDebug() << "[MCP] Stopped server:" << name;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,7 +281,7 @@ void JarvisMcp::startServer(McpServer &server)
         Q_EMIT serverStatusChanged();
     });
 
-    qDebug() << "[MCP] Starting server" << server.name << ":" << server.command << server.args;
+    qWarning() << "[MCP] Starting server" << server.name << ":" << server.command << server.args;
     proc->start(server.command, server.args);
 
     if (!proc->waitForStarted(5000)) {
@@ -334,7 +438,7 @@ void JarvisMcp::handleMessage(McpServer &server, const QJsonObject &msg)
 
     // Handle response based on which method it was
     if (pending.method == QStringLiteral("initialize")) {
-        qDebug() << "[MCP]" << server.name << "initialized, server info:"
+        qWarning() << "[MCP]" << server.name << "initialized, server info:"
                  << result[QStringLiteral("serverInfo")].toObject();
 
         server.initialized = true;
@@ -359,11 +463,23 @@ void JarvisMcp::handleMessage(McpServer &server, const QJsonObject &msg)
             m_toolToServer.remove(toolName);
         }
 
-        // Add new tools
+        // Add new tools — skip introspection tools that are redundant when
+        // tool definitions are already sent natively via the tools API.
+        // These cause models to introspect instead of acting.
+        static const QStringList skipTools = {
+            QStringLiteral("list_tools"), QStringLiteral("describe_tool"),
+            QStringLiteral("filter_tools"),
+            QStringLiteral("list_prompts"), QStringLiteral("describe_prompt"),
+            QStringLiteral("get_prompt"),
+        };
         for (const auto &toolVal : toolsArr) {
             const auto toolObj = toolVal.toObject();
+            const QString name = toolObj[QStringLiteral("name")].toString();
+            if (skipTools.contains(name))
+                continue;
+
             McpTool tool;
-            tool.name = toolObj[QStringLiteral("name")].toString();
+            tool.name = name;
             tool.description = toolObj[QStringLiteral("description")].toString();
             tool.inputSchema = toolObj[QStringLiteral("inputSchema")].toObject();
             tool.serverName = server.name;
@@ -372,8 +488,8 @@ void JarvisMcp::handleMessage(McpServer &server, const QJsonObject &msg)
             m_toolToServer.insert(tool.name, server.name);
         }
 
-        qDebug() << "[MCP]" << server.name << "discovered" << toolsArr.size()
-                 << "tools, total:" << m_tools.size();
+        qWarning() << "[MCP]" << server.name << "discovered" << toolsArr.size()
+                   << "tools, total:" << m_tools.size();
         Q_EMIT toolsChanged();
 
     } else if (pending.method == QStringLiteral("tools/call")) {

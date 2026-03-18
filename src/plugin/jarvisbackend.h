@@ -110,6 +110,9 @@ class JarvisBackend : public QObject
     // OAuth login status
     Q_PROPERTY(bool oauthLoggedIn READ isOAuthLoggedIn NOTIFY oauthStatusChanged)
     Q_PROPERTY(bool awaitingClaudeCode READ awaitingClaudeCode NOTIFY oauthStatusChanged)
+    Q_PROPERTY(int mcpToolCount READ mcpToolCount NOTIFY mcpToolsChanged)
+    Q_PROPERTY(QStringList mcpServerNames READ mcpServerNames NOTIFY mcpToolsChanged)
+    Q_PROPERTY(bool modelSupportsTools READ modelSupportsTools NOTIFY availableLlmModelsChanged)
 
 public:
     explicit JarvisBackend(QObject *parent = nullptr);
@@ -182,6 +185,9 @@ public:
     [[nodiscard]] QVariantList whisperModelList() const { return m_whisperModelList; }
     [[nodiscard]] QString wakeWord() const;
     [[nodiscard]] QString personalityPrompt() const;
+    [[nodiscard]] int mcpToolCount() const;
+    [[nodiscard]] QStringList mcpServerNames() const;
+    [[nodiscard]] bool modelSupportsTools() const;
     [[nodiscard]] QString systemPromptMode() const;
 
     // Continuous conversation
@@ -318,6 +324,7 @@ signals:
     void whisperModelListChanged();
     void wakeWordChanged();
     void personalityPromptChanged();
+    void mcpToolsChanged();
     void systemPromptModeChanged();
     void continuousModeChanged();
     void smartRoutingChanged();
@@ -448,6 +455,7 @@ private:
     // Streaming state
     QNetworkReply *m_streamReply{nullptr};
     QString m_streamBuffer;
+    bool m_nonStreaming{false};
     QString m_fullStreamedResponse;
     QString m_spokenSoFar;
     QString m_pendingOAuthMessage;
@@ -475,6 +483,7 @@ private:
     struct ChatMessage {
         QString role;
         QJsonValue content;  // QString (plain text) or QJsonArray (tool_use/tool_result blocks)
+        QJsonValue fullMessage;  // Complete message JSON for tool calls (includes tool_calls, tool_call_id)
     };
     std::vector<ChatMessage> m_conversationHistory;
 

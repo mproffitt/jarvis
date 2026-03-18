@@ -342,6 +342,7 @@ void JarvisBackend::connectModuleSignals()
     connect(m_settings, &JarvisSettings::wakeWordChanged, this, &JarvisBackend::wakeWordChanged);
     connect(m_settings, &JarvisSettings::personalityPromptChanged, this, &JarvisBackend::personalityPromptChanged);
     connect(m_settings, &JarvisSettings::systemPromptModeChanged, this, &JarvisBackend::systemPromptModeChanged);
+    connect(m_mcp, &JarvisMcp::toolsChanged, this, &JarvisBackend::mcpToolsChanged);
     connect(m_settings, &JarvisSettings::ttsRateChanged, this, [this]() { m_tts->onTtsRateChanged(); });
     connect(m_settings, &JarvisSettings::ttsPitchChanged, this, [this]() { m_tts->onTtsPitchChanged(); });
     connect(m_settings, &JarvisSettings::ttsVolumeChanged, this, [this]() { m_tts->onTtsVolumeChanged(); });
@@ -426,7 +427,7 @@ int JarvisBackend::contextTokenLimit() const { return m_settings->contextTokenLi
 int JarvisBackend::estimatedTokens() const
 {
     int total = 0;
-    for (const auto &[role, content] : m_conversationHistory) {
+    for (const auto &[role, content, _fullMsg] : m_conversationHistory) {
         if (content.isString())
             total += estimateTokenCount(content.toString()) + 4;
         else
@@ -703,6 +704,10 @@ void JarvisBackend::stopConversation()
 void JarvisBackend::setPersonalityPrompt(const QString &prompt) { m_settings->setPersonalityPrompt(prompt); }
 QString JarvisBackend::systemPromptMode() const { return m_settings->systemPromptMode(); }
 void JarvisBackend::setSystemPromptMode(const QString &mode) { m_settings->setSystemPromptMode(mode); }
+
+int JarvisBackend::mcpToolCount() const { return m_mcp->toolCount(); }
+QStringList JarvisBackend::mcpServerNames() const { return m_mcp->serverNames(); }
+bool JarvisBackend::modelSupportsTools() const { return m_settings->currentModelSupportsTools(); }
 void JarvisBackend::cancelDownload() { m_settings->cancelDownload(); }
 
 void JarvisBackend::testVoice(const QString &voiceId)
@@ -1235,7 +1240,6 @@ void JarvisBackend::continueToLlm(const QString &userMessage)
         requestBody[QStringLiteral("messages")] = messages;
         requestBody[QStringLiteral("temperature")] = 0.7;
         requestBody[QStringLiteral("max_tokens")] = 2048;
-        requestBody[QStringLiteral("stream")] = true;
 
         if (m_settings->providerNeedsModelInRequest()) {
             QString modelId = m_settings->routeModel(userMessage);
@@ -1270,6 +1274,12 @@ void JarvisBackend::continueToLlm(const QString &userMessage)
                 requestBody[QStringLiteral("tools")] = tools;
             }
         }
+
+        // Disable streaming when tools are available — tool call deltas
+        // in SSE chunks aren't parsed yet, and the non-streaming response
+        // handler already processes tool_calls correctly.
+        m_nonStreaming = requestBody.contains(QStringLiteral("tools"));
+        requestBody[QStringLiteral("stream")] = !m_nonStreaming;
 
         url = QUrl(m_settings->chatCompletionsUrl());
         request.setUrl(url);
@@ -1307,7 +1317,19 @@ void JarvisBackend::continueToLlm(const QString &userMessage)
         }
     }
 
-    m_streamReply = m_networkManager->post(request, QJsonDocument(requestBody).toJson());
+    const QByteArray requestData = QJsonDocument(requestBody).toJson();
+    // Dump request for debugging tool calling
+    {
+        const auto toolsArr = requestBody[QStringLiteral("tools")].toArray();
+        qWarning() << "[JARVIS] LLM request to:" << url.toString()
+                   << "model:" << requestBody[QStringLiteral("model")].toString()
+                   << "tools:" << toolsArr.size()
+                   << "stream:" << requestBody[QStringLiteral("stream")].toBool();
+        if (toolsArr.isEmpty())
+            qWarning() << "[JARVIS] WARNING: No tools in request!";
+    }
+
+    m_streamReply = m_networkManager->post(request, requestData);
     connect(m_streamReply, &QNetworkReply::readyRead, this, &JarvisBackend::onLlmStreamReadyRead);
     connect(m_streamReply, &QNetworkReply::finished, this, &JarvisBackend::onLlmStreamFinished);
 }
@@ -1327,6 +1349,18 @@ QString JarvisBackend::buildSystemPrompt() const
     // Include ACTION blocks only when the model lacks native tool calling
     if (!m_settings->currentModelSupportsTools())
         systemPrompt += QString::fromUtf8(JARVIS_ACTION_PROMPT);
+
+    // Guide the model on tool usage when tools are available
+    if (m_settings->currentModelSupportsTools() && m_mcp->toolCount() > 0) {
+        systemPrompt += QStringLiteral(
+            "\n\nTOOL USAGE:\n"
+            "You have access to tools that can query real systems and data. "
+            "When the user asks about infrastructure, clusters, services, or resources, "
+            "USE the available tools to get real data rather than giving generic instructions. "
+            "Call tools like list_resources, get_resource, or call_tool to retrieve actual information. "
+            "Do NOT use list_tools or describe_tool — you already have the tool definitions. "
+            "Present the results from tool calls directly to the user in a clear, concise way.\n");
+    }
 
     systemPrompt += QStringLiteral("\n\nCurrent system status:\n");
     systemPrompt += QStringLiteral("- CPU Usage: %1%\n").arg(m_system->cpuUsage(), 0, 'f', 1);
@@ -1421,7 +1455,9 @@ bool JarvisBackend::dispatchToolCall(const QString &name, const QJsonObject &arg
 
 QString JarvisBackend::doRagSearch(const QString &userMessage)
 {
-    // For providers with native tool support, skip — file_search tool handles it
+    // For Claude/OpenAI, the file_search tool handles RAG on-demand
+    // For local models (ollama/llama.cpp), proactive RAG is faster since
+    // Baloo pre-filters via indexed path/content/metadata search
     if (m_settings->isClaudeProvider() || m_settings->llmProvider() == QStringLiteral("openai"))
         return {};
 
@@ -1515,14 +1551,19 @@ QJsonArray JarvisBackend::buildConversationContext() const
         }
     }
 
-    for (const auto &[role, content] : m_conversationHistory) {
-        QJsonObject msg;
-        msg[QStringLiteral("role")] = role;
-        if (content.isArray())
-            msg[QStringLiteral("content")] = content.toArray();
-        else
-            msg[QStringLiteral("content")] = content.toString();
-        messages.append(msg);
+    for (const auto &entry : m_conversationHistory) {
+        if (!entry.fullMessage.isNull() && entry.fullMessage.isObject()) {
+            // Full message JSON (preserves tool_calls, tool_call_id, etc.)
+            messages.append(entry.fullMessage.toObject());
+        } else {
+            QJsonObject msg;
+            msg[QStringLiteral("role")] = entry.role;
+            if (entry.content.isArray())
+                msg[QStringLiteral("content")] = entry.content.toArray();
+            else
+                msg[QStringLiteral("content")] = entry.content.toString();
+            messages.append(msg);
+        }
     }
 
     return messages;
@@ -1570,6 +1611,10 @@ void JarvisBackend::onLlmStreamReadyRead()
 
     const QByteArray data = m_streamReply->readAll();
     m_streamBuffer += QString::fromUtf8(data);
+
+    // Non-streaming mode (tools enabled): just accumulate, parse in onFinished
+    if (m_nonStreaming)
+        return;
 
     if (m_settings->isGeminiOAuthMode()) {
         // Gemini Cloud Code returns a JSON array: [{...},{...},...]
@@ -1953,13 +1998,16 @@ void JarvisBackend::continueAfterToolCall()
         const auto message = choices[0].toObject()[QStringLiteral("message")].toObject();
         const QString content = message[QStringLiteral("content")].toString();
         const auto toolCalls = message[QStringLiteral("tool_calls")].toArray();
+        const QString finishReason = choices[0].toObject()[QStringLiteral("finish_reason")].toString();
+        qWarning() << "[JARVIS] LLM response: finish_reason=" << finishReason
+                   << "tool_calls=" << toolCalls.size()
+                   << "content_len=" << content.length();
 
-        // Add assistant message to history
+        // Add assistant message to history (with full message for tool calls)
         if (!toolCalls.isEmpty()) {
-            // Store the full message object as the content for OpenAI format
-            QJsonArray msgArr;
-            msgArr.append(message);
-            m_conversationHistory.push_back({QStringLiteral("assistant"), QJsonValue(content.isEmpty() ? QStringLiteral("") : content)});
+            m_conversationHistory.push_back({QStringLiteral("assistant"),
+                QJsonValue(content.isEmpty() ? QStringLiteral("") : content),
+                QJsonValue(message)});
         } else {
             m_conversationHistory.push_back({QStringLiteral("assistant"), QJsonValue(content)});
         }
@@ -1989,7 +2037,6 @@ void JarvisBackend::continueAfterToolCall()
                 auto openaiCallback = [this, callId, toolName, remaining](QJsonArray content, bool isError) {
                     qDebug() << "[JARVIS] Tool result for" << toolName << "error:" << isError;
 
-                    // Build tool result message for OpenAI format
                     QString resultStr;
                     for (const auto &c : content) {
                         const auto cObj = c.toObject();
@@ -2001,9 +2048,8 @@ void JarvisBackend::continueAfterToolCall()
                     toolMsg[QStringLiteral("role")] = QStringLiteral("tool");
                     toolMsg[QStringLiteral("tool_call_id")] = callId;
                     toolMsg[QStringLiteral("content")] = resultStr;
-
-                    // For OpenAI, each tool result is a separate message with role "tool"
-                    m_conversationHistory.push_back({QStringLiteral("tool"), QJsonValue(resultStr)});
+                    m_conversationHistory.push_back({QStringLiteral("tool"),
+                        QJsonValue(resultStr), QJsonValue(toolMsg)});
 
                     if (--(*remaining) == 0) {
                         delete remaining;
@@ -2050,10 +2096,9 @@ void JarvisBackend::onLlmStreamFinished()
     m_streamReply->deleteLater();
     m_streamReply = nullptr;
 
-    m_processing = false;
-    emit processingChanged();
-
     if (error != QNetworkReply::NoError && m_fullStreamedResponse.isEmpty()) {
+        m_processing = false;
+        emit processingChanged();
         qWarning() << "[JARVIS] LLM request failed:" << httpStatus << errorString;
         const auto errorMsg = QStringLiteral("Connection issue: %1")
                                   .arg(errorString);
@@ -2065,24 +2110,113 @@ void JarvisBackend::onLlmStreamFinished()
         return;
     }
 
-    // Parse any remaining SSE lines in buffer
-    while (true) {
-        const int nlPos = m_streamBuffer.indexOf(QLatin1Char('\n'));
-        if (nlPos < 0) break;
+    // Check if this is a non-streaming JSON response (used when tools are available).
+    // Non-streaming responses are a single JSON object, not SSE "data:" lines.
+    const QString trimmedBuffer = m_streamBuffer.trimmed();
+    qWarning() << "[JARVIS] onStreamFinished: buffer_len=" << trimmedBuffer.length()
+               << "fullResponse_len=" << m_fullStreamedResponse.length()
+               << "starts_with_brace=" << trimmedBuffer.startsWith(QLatin1Char('{'))
+               << "error=" << error
+               << "http=" << httpStatus;
+    if (!trimmedBuffer.isEmpty() && trimmedBuffer.startsWith(QLatin1Char('{'))
+        && m_fullStreamedResponse.isEmpty()) {
+        // Parse as complete OpenAI-format response
+        const auto doc = QJsonDocument::fromJson(trimmedBuffer.toUtf8());
+        if (!doc.isNull() && doc.isObject()) {
+            const auto root = doc.object();
+            const auto choices = root[QStringLiteral("choices")].toArray();
+            if (!choices.isEmpty()) {
+                const auto message = choices[0].toObject()[QStringLiteral("message")].toObject();
+                const QString content = message[QStringLiteral("content")].toString();
+                const auto toolCalls = message[QStringLiteral("tool_calls")].toArray();
+                const QString finishReason = choices[0].toObject()[QStringLiteral("finish_reason")].toString();
+                qWarning() << "[JARVIS] Non-streaming response: finish_reason=" << finishReason
+                           << "tool_calls=" << toolCalls.size()
+                           << "content_len=" << content.length();
 
-        const QString line = m_streamBuffer.left(nlPos).trimmed();
-        m_streamBuffer = m_streamBuffer.mid(nlPos + 1);
+                if (!toolCalls.isEmpty()) {
+                    // Store full assistant message (with tool_calls) in history
+                    m_conversationHistory.push_back({QStringLiteral("assistant"),
+                        QJsonValue(content.isEmpty() ? QStringLiteral("") : content),
+                        QJsonValue(message)});
 
-        if (line.isEmpty() || line == QStringLiteral("data: [DONE]")) continue;
-        if (!line.startsWith(QStringLiteral("data: "))) continue;
+                    if (!content.isEmpty()) {
+                        const QString spokenText = stripActionsFromResponse(content);
+                        m_streamingResponse = spokenText;
+                        emit streamingResponseChanged();
+                        m_tts->speakSentence(spokenText);
+                    }
 
-        const QString content = extractStreamToken(line.mid(6));
-        if (!content.isEmpty()) {
-            m_fullStreamedResponse += content;
+                    // Dispatch tool calls
+                    int pendingCalls = toolCalls.size();
+                    auto *remainingCalls = new int(pendingCalls);
+
+                    for (const auto &tc : toolCalls) {
+                        const auto tcObj = tc.toObject();
+                        const QString callId = tcObj[QStringLiteral("id")].toString();
+                        const auto func = tcObj[QStringLiteral("function")].toObject();
+                        const QString toolName = func[QStringLiteral("name")].toString();
+                        const QJsonObject toolArgs = QJsonDocument::fromJson(
+                            func[QStringLiteral("arguments")].toString().toUtf8()).object();
+
+                        qWarning() << "[JARVIS] Tool call:" << toolName << "id:" << callId;
+                        setStatus(QStringLiteral("Calling tool: %1").arg(toolName));
+
+                        auto callback = [this, callId, toolName, remainingCalls](QJsonArray resultContent, bool isError) {
+                            QString resultStr;
+                            for (const auto &c : resultContent) {
+                                const auto cObj = c.toObject();
+                                if (cObj[QStringLiteral("type")].toString() == QStringLiteral("text"))
+                                    resultStr += cObj[QStringLiteral("text")].toString();
+                            }
+
+                            // Store full tool result message with tool_call_id
+                            QJsonObject toolMsg;
+                            toolMsg[QStringLiteral("role")] = QStringLiteral("tool");
+                            toolMsg[QStringLiteral("tool_call_id")] = callId;
+                            toolMsg[QStringLiteral("content")] = resultStr;
+                            m_conversationHistory.push_back({QStringLiteral("tool"),
+                                QJsonValue(resultStr), QJsonValue(toolMsg)});
+
+                            if (--(*remainingCalls) == 0) {
+                                delete remainingCalls;
+                                continueAfterToolCall();
+                            }
+                        };
+                        if (!dispatchToolCall(toolName, toolArgs, callback))
+                            m_mcp->callTool(toolName, toolArgs, callback);
+                    }
+                    return; // Don't finalize — tool continuation will handle it
+                }
+
+                // No tool calls — treat content as the response
+                if (!content.isEmpty()) {
+                    m_fullStreamedResponse = content;
+                }
+            }
+        }
+    } else {
+        // SSE format: parse remaining lines
+        while (true) {
+            const int nlPos = m_streamBuffer.indexOf(QLatin1Char('\n'));
+            if (nlPos < 0) break;
+
+            const QString line = m_streamBuffer.left(nlPos).trimmed();
+            m_streamBuffer = m_streamBuffer.mid(nlPos + 1);
+
+            if (line.isEmpty() || line == QStringLiteral("data: [DONE]")) continue;
+            if (!line.startsWith(QStringLiteral("data: "))) continue;
+
+            const QString content = extractStreamToken(line.mid(6));
+            if (!content.isEmpty()) {
+                m_fullStreamedResponse += content;
+            }
         }
     }
 
     // Finalize
+    m_processing = false;
+    emit processingChanged();
     finalizeStreamingResponse();
 }
 
@@ -2462,7 +2596,7 @@ void JarvisBackend::clearHistory()
 void JarvisBackend::exportHistory(const QString &path)
 {
     QJsonArray arr;
-    for (const auto &[role, content] : m_conversationHistory) {
+    for (const auto &[role, content, _fullMsg] : m_conversationHistory) {
         QJsonObject entry;
         entry[QStringLiteral("role")] = role;
         if (content.isArray())
@@ -2570,7 +2704,7 @@ void JarvisBackend::trimConversationToTokenLimit()
 
     // Trim by token count — remove oldest messages until under budget
     int totalTokens = 0;
-    for (const auto &[role, content] : m_conversationHistory)
+    for (const auto &[role, content, _fullMsg] : m_conversationHistory)
         totalTokens += contentTokens(content) + 4;
 
     while (totalTokens > available && m_conversationHistory.size() > 1) {
@@ -2583,7 +2717,7 @@ void JarvisBackend::saveChatHistory()
 {
     const QString path = m_settings->jarvisDataDir() + QStringLiteral("/chat_history.json");
     QJsonArray historyArray;
-    for (const auto &[role, content] : m_conversationHistory) {
+    for (const auto &[role, content, _fullMsg] : m_conversationHistory) {
         QJsonObject entry;
         entry[QStringLiteral("role")] = role;
         if (content.isArray())

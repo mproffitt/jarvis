@@ -135,6 +135,31 @@ Item {
                             }
                         }
 
+                        RowLayout {
+                            Kirigami.FormData.label: i18n("Tools:")
+                            spacing: Kirigami.Units.smallSpacing
+                            Kirigami.Icon {
+                                source: JarvisBackend.modelSupportsTools ? "emblem-default" : "emblem-warning"
+                                implicitWidth: Kirigami.Units.iconSizes.small
+                                implicitHeight: Kirigami.Units.iconSizes.small
+                            }
+                            Label {
+                                text: {
+                                    if (!JarvisBackend.modelSupportsTools)
+                                        return i18n("Model does not support tool calling (using ACTION blocks)")
+                                    var count = JarvisBackend.mcpToolCount
+                                    var servers = JarvisBackend.mcpServerNames
+                                    if (count === 0)
+                                        return i18n("Native tool calling (no MCP servers)")
+                                    return i18n("%1 tools from %2", count, servers.join(", "))
+                                }
+                                color: JarvisBackend.modelSupportsTools ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
+                                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                                wrapMode: Text.Wrap
+                                Layout.fillWidth: true
+                            }
+                        }
+
                         // ── Authentication ──
 
                         // OpenAI API Key

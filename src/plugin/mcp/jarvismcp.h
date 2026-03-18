@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QProcess>
 #include <QTimer>
+#include <QFileSystemWatcher>
 
 #include <functional>
 
@@ -36,6 +37,8 @@ public:
 
     /// Check whether a tool with the given name exists across all servers.
     [[nodiscard]] bool hasTool(const QString &name) const;
+    [[nodiscard]] int toolCount() const { return m_tools.size(); }
+    [[nodiscard]] QStringList serverNames() const { return m_servers.keys(); }
 
     /// Execute a tool by name. The callback receives (content array, isError).
     using ToolCallback = std::function<void(QJsonArray content, bool isError)>;
@@ -72,6 +75,8 @@ private:
 
     // Config
     void loadConfig();
+    void reloadConfig();
+    void stopServer(const QString &name);
     [[nodiscard]] QString configFilePath() const;
 
     // Server lifecycle
@@ -102,4 +107,6 @@ private:
     QHash<QString, McpServer> m_servers;
     QHash<QString, McpTool> m_tools;        // tool name -> tool
     QHash<QString, QString> m_toolToServer; // tool name -> server name
+
+    QFileSystemWatcher *m_configWatcher{nullptr};
 };
