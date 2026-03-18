@@ -79,6 +79,7 @@ private:
     void stopServer(const QString &name);
     [[nodiscard]] QString configFilePath() const;
 
+
     // Server lifecycle
     void startServer(McpServer &server);
     void initializeServer(McpServer &server);

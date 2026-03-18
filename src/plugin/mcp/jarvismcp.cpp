@@ -463,23 +463,11 @@ void JarvisMcp::handleMessage(McpServer &server, const QJsonObject &msg)
             m_toolToServer.remove(toolName);
         }
 
-        // Add new tools — skip introspection tools that are redundant when
-        // tool definitions are already sent natively via the tools API.
-        // These cause models to introspect instead of acting.
-        static const QStringList skipTools = {
-            QStringLiteral("list_tools"), QStringLiteral("describe_tool"),
-            QStringLiteral("filter_tools"),
-            QStringLiteral("list_prompts"), QStringLiteral("describe_prompt"),
-            QStringLiteral("get_prompt"),
-        };
+        // Add discovered tools
         for (const auto &toolVal : toolsArr) {
             const auto toolObj = toolVal.toObject();
-            const QString name = toolObj[QStringLiteral("name")].toString();
-            if (skipTools.contains(name))
-                continue;
-
             McpTool tool;
-            tool.name = name;
+            tool.name = toolObj[QStringLiteral("name")].toString();
             tool.description = toolObj[QStringLiteral("description")].toString();
             tool.inputSchema = toolObj[QStringLiteral("inputSchema")].toObject();
             tool.serverName = server.name;
@@ -490,6 +478,7 @@ void JarvisMcp::handleMessage(McpServer &server, const QJsonObject &msg)
 
         qWarning() << "[MCP]" << server.name << "discovered" << toolsArr.size()
                    << "tools, total:" << m_tools.size();
+
         Q_EMIT toolsChanged();
 
     } else if (pending.method == QStringLiteral("tools/call")) {

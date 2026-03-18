@@ -1512,13 +1512,21 @@ void JarvisBackend::onRagFinished(const QString &userMessage, const QString &con
             auto &last = m_conversationHistory.back();
             if (last.role == QStringLiteral("user")) {
                 const QString original = last.content.toString();
+                const QString toolNote = m_settings->currentModelSupportsTools() && m_mcp->toolCount() > 0
+                    ? QStringLiteral(
+                        "IMPORTANT: You have tools available that can query live systems for real-time data. "
+                        "Prefer using your tools over these file contents when the question asks about "
+                        "current state, status, or live information. "
+                        "These files may be outdated — use them only as supplementary reference.\n\n")
+                    : QString();
                 last.content = QJsonValue(QStringLiteral(
                     "%1\n\n%2\n\n"
+                    "%3"
                     "If the file contents above are relevant to the following question, use them as context. "
                     "Otherwise, you may ignore them and answer normally.\n\n"
-                    "Question: %3\n\n"
-                    "%4")
-                    .arg(newRagPrefix, context, original, newRagMarker));
+                    "Question: %4\n\n"
+                    "%5")
+                    .arg(newRagPrefix, context, toolNote, original, newRagMarker));
             }
         }
     } else {
